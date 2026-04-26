@@ -1,0 +1,66 @@
+package model
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/QuantumNous/new-api/common"
+)
+
+// ConversationRecord stores the raw request body (messages) for a consume log entry.
+// This is an opt-in feature controlled by ConversationRecordEnabled setting.
+type ConversationRecord struct {
+	Id        int    `json:"id" gorm:"primaryKey;autoIncrement"`
+	LogId     int    `json:"log_id" gorm:"index;default:0"`
+	UserId    int    `json:"user_id" gorm:"index;default:0"`
+	RequestId string `json:"request_id" gorm:"type:varchar(64);index;default:''"`
+	Content   string `json:"content" gorm:"type:text"`
+	CreatedAt int64  `json:"created_at" gorm:"bigint;default:0"`
+}
+
+func SaveConversationRecord(logId int, userId int, requestId string, content string) error {
+	if LOG_DB == nil {
+		return fmt.Errorf("log database not initialized")
+	}
+	record := &ConversationRecord{
+		LogId:     logId,
+		UserId:    userId,
+		RequestId: requestId,
+		Content:   content,
+		CreatedAt: common.GetTimestamp(),
+	}
+	return LOG_DB.Create(record).Error
+}
+
+func GetConversationByLogId(logId int) (*ConversationRecord, error) {
+	if LOG_DB == nil {
+		return nil, fmt.Errorf("log database not initialized")
+	}
+	var record ConversationRecord
+	err := LOG_DB.Where("log_id = ?", logId).First(&record).Error
+	if err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func DeleteOldConversationRecords(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
+	if LOG_DB == nil {
+		return 0, fmt.Errorf("log database not initialized")
+	}
+	var total int64 = 0
+	for {
+		if nil != ctx.Err() {
+			return total, ctx.Err()
+		}
+		result := LOG_DB.Where("created_at < ?", targetTimestamp).Limit(limit).Delete(&ConversationRecord{})
+		if nil != result.Error {
+			return total, result.Error
+		}
+		total += result.RowsAffected
+		if result.RowsAffected < int64(limit) {
+			break
+		}
+	}
+	return total, nil
+}

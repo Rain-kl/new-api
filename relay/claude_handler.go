@@ -129,6 +129,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	}
 
 	if !model_setting.GetGlobalSettings().PassThroughRequestEnabled &&
+		info.ApiType != constant.APITypeEcho &&
 		!info.ChannelSetting.PassThroughBodyEnabled &&
 		service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
 		openAIRequest, convErr := service.ClaudeToOpenAIRequest(*request, info)
