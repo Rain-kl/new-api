@@ -80,7 +80,7 @@ jobs:
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: |
-            wyrms/new-api
+            wryms/new-api
 #            ghcr.io/${{ env.GHCR_REPOSITORY }}
 
       - name: Build & push single-arch (to both registries)
@@ -91,8 +91,8 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: true
           tags: |
-            wyrms/new-api:${{ env.TAG }}-${{ matrix.arch }}
-            wyrms/new-api:latest-${{ matrix.arch }}
+            wryms/new-api:${{ env.TAG }}-${{ matrix.arch }}
+            wryms/new-api:latest-${{ matrix.arch }}
 #            ghcr.io/${{ env.GHCR_REPOSITORY }}:${{ env.TAG }}-${{ matrix.arch }}
 #            ghcr.io/${{ env.GHCR_REPOSITORY }}:latest-${{ matrix.arch }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -105,13 +105,13 @@ jobs:
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
 
       - name: Sign image with cosign
-        run: cosign sign --yes wyrms/new-api@${{ steps.build.outputs.digest }}
+        run: cosign sign --yes wryms/new-api@${{ steps.build.outputs.digest }}
 
       - name: Output digest
         run: |
           echo "### Docker Image Digest (${{ matrix.arch }})" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "wyrms/new-api:${{ env.TAG }}-${{ matrix.arch }}" >> $GITHUB_STEP_SUMMARY
+          echo "wryms/new-api:${{ env.TAG }}-${{ matrix.arch }}" >> $GITHUB_STEP_SUMMARY
           echo "${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
@@ -141,22 +141,22 @@ jobs:
       - name: Create & push manifest (Docker Hub - version)
         run: |
           docker buildx imagetools create \
-            -t wyrms/new-api:${TAG} \
-            wyrms/new-api:${TAG}-amd64 \
-            wyrms/new-api:${TAG}-arm64
+            -t wryms/new-api:${TAG} \
+            wryms/new-api:${TAG}-amd64 \
+            wryms/new-api:${TAG}-arm64
 
       - name: Create & push manifest (Docker Hub - latest)
         run: |
           docker buildx imagetools create \
-            -t wyrms/new-api:latest \
-            wyrms/new-api:latest-amd64 \
-            wyrms/new-api:latest-arm64
+            -t wryms/new-api:latest \
+            wryms/new-api:latest-amd64 \
+            wryms/new-api:latest-arm64
 
       - name: Output manifest digest
         run: |
           echo "### Multi-arch Manifest" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          docker buildx imagetools inspect wyrms/new-api:${TAG} >> $GITHUB_STEP_SUMMARY
+          docker buildx imagetools inspect wryms/new-api:${TAG} >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       # ---- GHCR ----
