@@ -245,6 +245,15 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}
+	if common.ConversationRecordEnabled {
+		if storage, exists := c.Get(common.KeyBodyStorage); exists && storage != nil {
+			if bs, ok := storage.(common.BodyStorage); ok {
+				if bodyBytes, err := bs.Bytes(); err == nil {
+					SaveConversationRecord(log.Id, userId, requestId, string(bodyBytes))
+				}
+			}
+		}
+	}
 	if common.DataExportEnabled {
 		gopool.Go(func() {
 			LogQuotaData(userId, username, params.ModelName, params.Quota, common.GetTimestamp(), params.PromptTokens+params.CompletionTokens)

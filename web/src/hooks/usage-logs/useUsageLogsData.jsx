@@ -187,6 +187,11 @@ export const useLogsData = () => {
   const [showParamOverrideModal, setShowParamOverrideModal] = useState(false);
   const [paramOverrideTarget, setParamOverrideTarget] = useState(null);
 
+  // Conversation view modal state
+  const [showConversationModal, setShowConversationModal] = useState(false);
+  const [conversationLoading, setConversationLoading] = useState(false);
+  const [conversationContent, setConversationContent] = useState('');
+
   // Initialize default column visibility
   const initDefaultColumns = () => {
     const defaults = getDefaultColumnVisibility();
@@ -362,6 +367,23 @@ export const useLogsData = () => {
       requestPath: other?.request_path || '',
     });
     setShowParamOverrideModal(true);
+  };
+
+  const openConversationModal = async (logId) => {
+    setConversationContent('');
+    setConversationLoading(true);
+    setShowConversationModal(true);
+    try {
+      const res = await API.get(`/api/log/conversation/${logId}`);
+      const { success, data } = res.data;
+      if (success && data) {
+        setConversationContent(data.content || '');
+      }
+    } catch (e) {
+      // ignore
+    } finally {
+      setConversationLoading(false);
+    }
   };
 
   // Format logs data
@@ -641,6 +663,19 @@ export const useLogsData = () => {
           value: localCountMode,
         });
       }
+      if (isAdminUser && logs[i].type === 2) {
+        expandDataLocal.push({
+          key: t('对话详情'),
+          value: (
+            <span
+              style={{ cursor: 'pointer', color: 'var(--semi-color-primary)' }}
+              onClick={() => openConversationModal(logs[i].id)}
+            >
+              {t('查看')}
+            </span>
+          ),
+        });
+      }
       if (isAdminUser && logs[i].type === 1) {
         const adminInfo = other?.admin_info;
         if (adminInfo) {
@@ -881,6 +916,11 @@ export const useLogsData = () => {
     showParamOverrideModal,
     setShowParamOverrideModal,
     paramOverrideTarget,
+    showConversationModal,
+    setShowConversationModal,
+    conversationLoading,
+    conversationContent,
+    openConversationModal,
 
     // Functions
     loadLogs,

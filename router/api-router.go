@@ -300,6 +300,9 @@ func SetApiRouter(router *gin.Engine) {
 		dataRoute.GET("/users", middleware.AdminAuth(), controller.GetQuotaDatesByUser)
 		dataRoute.GET("/self", middleware.UserAuth(), controller.GetUserQuotaDates)
 
+		logRoute.GET("/conversation/:log_id", middleware.AdminAuth(), controller.GetConversationByLogId)
+		logRoute.DELETE("/conversation/", middleware.AdminAuth(), controller.DeleteConversationRecords)
+
 		logRoute.Use(middleware.CORS(), middleware.CriticalRateLimit())
 		{
 			logRoute.GET("/token", middleware.TokenAuthReadOnly(), controller.GetLogByKey)
