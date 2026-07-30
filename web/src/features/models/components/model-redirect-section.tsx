@@ -534,12 +534,11 @@ function ModelRedirectDrawer(props: {
     }
   }, [props.open, props.editing])
 
-  const { data: groupList = [] } = useQuery({
+  // Must match other pages: queryFn returns ApiResponse, not unwrapped array.
+  // Shared key ['groups'] may already be cached as ApiResponse from channels/users.
+  const { data: groupsData } = useQuery({
     queryKey: ['groups'],
-    queryFn: async () => {
-      const res = await getGroups()
-      return (res.data ?? []) as string[]
-    },
+    queryFn: getGroups,
     enabled: props.open,
   })
 
@@ -547,7 +546,9 @@ function ModelRedirectDrawer(props: {
     queryKey: ['channels-for-redirect'],
     queryFn: async () => {
       const res = await getChannels({ p: 0, page_size: 500 })
-      return (res.data?.items ?? []).map((ch) => ({
+      const items = res.data?.items
+      if (!Array.isArray(items)) return [] as Array<{ id: number; name: string }>
+      return items.map((ch) => ({
         id: ch.id,
         name: ch.name,
       }))
@@ -555,8 +556,13 @@ function ModelRedirectDrawer(props: {
     enabled: props.open,
   })
 
+  const groupList = useMemo(() => {
+    const raw = groupsData?.data
+    return Array.isArray(raw) ? raw : []
+  }, [groupsData])
+
   const groupOptions = useMemo(
-    () => groupList.map((g) => ({ value: g, label: g })),
+    () => groupList.map((g) => ({ value: String(g), label: String(g) })),
     [groupList]
   )
 
