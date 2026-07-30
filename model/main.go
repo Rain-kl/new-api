@@ -211,10 +211,15 @@ func InitDB() (err error) {
 
 func InitLogDB() (err error) {
 	if os.Getenv("LOG_SQL_DSN") == "" {
+		// Shared main DB: upstream leaves Log{} to migrateDB(). Personal LOG
+		// tables (RegisterLOGDBModel) still need a migrate on the shared handle.
 		LOG_DB = DB
 		common.SetLogDatabaseType(common.MainDatabaseType())
 		initCol()
-		return
+		if !common.IsMasterNode {
+			return nil
+		}
+		return migrateRegisteredLOGDBModels()
 	}
 	db, dbType, err := chooseDB("LOG_SQL_DSN", true)
 	if err == nil {
@@ -398,10 +403,14 @@ func migrateDBFast() error {
 
 func migrateLOGDB() error {
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		// ClickHouse only hosts the logs table DDL; personal SQL tables are skipped.
 		return migrateClickHouseLogDB()
 	}
-	// logDBMigrateModels includes upstream Log + any RegisterLOGDBModel personal tables.
-	return LOG_DB.AutoMigrate(logDBMigrateModels()...)
+	if err := LOG_DB.AutoMigrate(&Log{}); err != nil {
+		return err
+	}
+	// Stable personal hook: only registered extras (conversation_records, …).
+	return migrateRegisteredLOGDBModels()
 }
 
 func migrateClickHouseLogDB() error {

@@ -10,13 +10,18 @@ import (
 
 // ConversationRecord stores the raw request body (messages) for a consume log entry.
 // This is an opt-in feature controlled by ConversationRecordEnabled setting.
+//
+// Tag notes (SQLite / glebarez + GORM v1.25):
+//   - avoid `default:”` on strings — external DDL with DEFAULT ” makes AutoMigrate
+//     fail with "failed to look up field … from DDL";
+//   - prefer size:N over type:varchar(N) for portable string columns.
 type ConversationRecord struct {
 	Id        int    `json:"id" gorm:"primaryKey;autoIncrement"`
 	LogId     int    `json:"log_id" gorm:"index;default:0"`
 	UserId    int    `json:"user_id" gorm:"index;default:0"`
-	RequestId string `json:"request_id" gorm:"type:varchar(64);index;default:''"`
+	RequestId string `json:"request_id" gorm:"size:64;index"`
 	Content   string `json:"content" gorm:"type:text"`
-	CreatedAt int64  `json:"created_at" gorm:"bigint;default:0"`
+	CreatedAt int64  `json:"created_at" gorm:"index;default:0"`
 }
 
 func init() {
