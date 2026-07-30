@@ -12,6 +12,13 @@ const (
 	APITypeEcho = 1000
 )
 
+// Personal gin context keys (model redirect, etc.).
+const (
+	ContextKeyModelRedirectActive      ContextKey = "model_redirect_active"
+	ContextKeyModelRedirectClientModel ContextKey = "model_redirect_client_model"
+	ContextKeyModelRedirectCandidates  ContextKey = "model_redirect_candidates"
+)
+
 func init() {
 	// Map registration avoids editing the upstream ChannelTypeNames literal.
 	ChannelTypeNames[ChannelTypeEcho] = "Echo"

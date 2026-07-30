@@ -191,7 +191,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
 
-	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
+	// Model redirect: allow up to len(candidates) attempts even when RetryTimes=0.
+	maxRetry := common.RetryTimes
+	if cands, ok := getModelRedirectCandidates(c); ok && len(cands) > 0 {
+		if n := len(cands) - 1; n > maxRetry {
+			maxRetry = n
+		}
+	}
+
+	for ; retryParam.GetRetry() <= maxRetry; retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
 		if channelErr != nil {
@@ -234,7 +242,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
-		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
+		if !shouldRetry(c, newAPIError, maxRetry-retryParam.GetRetry()) {
 			break
 		}
 	}
@@ -293,7 +301,76 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 	return meta
 }
 
+func getModelRedirectCandidates(c *gin.Context) ([]model.RedirectCandidate, bool) {
+	if !common.GetContextKeyBool(c, constant.ContextKeyModelRedirectActive) {
+		return nil, false
+	}
+	raw, ok := common.GetContextKey(c, constant.ContextKeyModelRedirectCandidates)
+	if !ok || raw == nil {
+		return nil, false
+	}
+	cands, ok := raw.([]model.RedirectCandidate)
+	if !ok || len(cands) == 0 {
+		return nil, false
+	}
+	return cands, true
+}
+
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
+	// Personal: walk model-redirect priority list on retries.
+	if cands, ok := getModelRedirectCandidates(c); ok {
+		idx := retryParam.GetRetry()
+		if idx >= len(cands) {
+			return nil, types.NewError(fmt.Errorf("model redirect candidates exhausted"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
+		// First attempt: distributor already set context; reuse unless ChannelMeta was set.
+		if info.ChannelMeta == nil && idx == 0 {
+			autoBan := c.GetBool("auto_ban")
+			autoBanInt := 1
+			if !autoBan {
+				autoBanInt = 0
+			}
+			return &model.Channel{
+				Id:      c.GetInt("channel_id"),
+				Type:    c.GetInt("channel_type"),
+				Name:    c.GetString("channel_name"),
+				AutoBan: &autoBanInt,
+			}, nil
+		}
+		cand := cands[idx]
+		channel, err := model.GetChannelForRedirect(cand.ChannelID)
+		if err != nil || channel == nil {
+			return nil, types.NewError(fmt.Errorf("model redirect channel #%d not found", cand.ChannelID), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
+		clientModel := common.GetContextKeyString(c, constant.ContextKeyModelRedirectClientModel)
+		if clientModel == "" {
+			clientModel = info.OriginModelName
+		}
+		attemptModel := model.AttemptModel(clientModel, cand)
+		if setupErr := middleware.SetupContextForSelectedChannel(c, channel, attemptModel); setupErr != nil {
+			return nil, setupErr
+		}
+		// Billing must follow the model that actually runs on this hop.
+		info.OriginModelName = attemptModel
+		info.UpstreamModelName = attemptModel
+		info.IsModelMapped = false
+		info.ChannelMeta = nil // force InitChannelMeta to re-read gin context
+		// Recalculate price ratios for the new attempt model (settlement accuracy).
+		meta := &types.TokenCountMeta{MaxTokens: 0}
+		if info.Request != nil {
+			// Prefer existing estimate; full re-token is unnecessary for ratio lookup.
+			meta = fastTokenCountMetaForPricing(info.Request)
+		}
+		if priceData, priceErr := helper.ModelPriceHelper(c, info, info.GetEstimatePromptTokens(), meta); priceErr == nil {
+			info.PriceData = priceData
+		} else {
+			// Keep previous price data if lookup fails; settlement still uses channel context.
+			info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
+			logger.LogWarn(c, "model redirect price recompute failed: "+priceErr.Error())
+		}
+		return channel, nil
+	}
+
 	if info.ChannelMeta == nil {
 		autoBan := c.GetBool("auto_ban")
 		autoBanInt := 1
@@ -353,6 +430,20 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	}
 	if operation_setting.IsAlwaysSkipRetryCode(openaiErr.GetErrorCode()) {
 		return false
+	}
+	// Personal model-redirect HA: from the end-user's view, any failed hop is just
+	// "this priority is unavailable" — including upstream 401/403 (bad key / no
+	// permission on that channel). Prefer the next priority over surfacing the error.
+	// These codes are from new-api → upstream, not client → new-api auth.
+	if common.GetContextKeyBool(c, constant.ContextKeyModelRedirectActive) {
+		if code == http.StatusUnauthorized || // 401
+			code == http.StatusForbidden || // 403
+			code == http.StatusNotFound ||
+			code == http.StatusTooManyRequests ||
+			code == http.StatusRequestTimeout ||
+			code >= http.StatusInternalServerError {
+			return true
+		}
 	}
 	return operation_setting.ShouldRetryByStatusCode(code)
 }

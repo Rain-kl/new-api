@@ -34,6 +34,11 @@ import { ModelsDialogs } from './components/models-dialogs'
 import { ModelsPrimaryButtons } from './components/models-primary-buttons'
 import { ModelsProvider, useModels } from './components/models-provider'
 import { ModelsTable } from './components/models-table'
+import {
+  ModelRedirectPrimaryButtons,
+  ModelRedirectProvider,
+  ModelRedirectSection,
+} from './components/model-redirect-section'
 import { useModelDeploymentSettings } from './hooks/use-model-deployment-settings'
 import { deploymentsQueryKeys } from './lib'
 import {
@@ -47,6 +52,10 @@ const route = getRouteApi('/_authenticated/models/$section')
 const SECTION_META: Record<ModelsSectionId, { titleKey: string }> = {
   metadata: {
     titleKey: 'Metadata',
+  },
+  redirect: {
+    // Hardcoded Chinese (no i18n) for personal feature UI
+    titleKey: '模型重定向',
   },
   deployments: {
     titleKey: 'Deployments',
@@ -83,19 +92,23 @@ function ModelsContent() {
 
   const meta = SECTION_META[activeSection] ?? SECTION_META.metadata
 
-  return (
+  const page = (
     <>
       <SectionPageLayout fixedContent>
-        <SectionPageLayout.Title>{t(meta.titleKey)}</SectionPageLayout.Title>
+        <SectionPageLayout.Title>
+          {activeSection === 'redirect' ? meta.titleKey : t(meta.titleKey)}
+        </SectionPageLayout.Title>
         <SectionPageLayout.Actions>
           {activeSection === 'metadata' ? (
             <ModelsPrimaryButtons />
-          ) : (
+          ) : activeSection === 'redirect' ? (
+            <ModelRedirectPrimaryButtons />
+          ) : activeSection === 'deployments' ? (
             <Button onClick={() => setCreateDeploymentOpen(true)} size='sm'>
               <Plus className='h-4 w-4' />
               {t('Create deployment')}
             </Button>
-          )}
+          ) : null}
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
           <div className='flex h-full min-h-0 flex-col gap-4'>
@@ -103,7 +116,9 @@ function ModelsContent() {
               <TabsList className='max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto'>
                 {MODELS_SECTION_IDS.map((section) => (
                   <TabsTrigger key={section} value={section}>
-                    {t(SECTION_META[section].titleKey)}
+                    {section === 'redirect'
+                      ? SECTION_META[section].titleKey
+                      : t(SECTION_META[section].titleKey)}
                   </TabsTrigger>
                 ))}
               </TabsList>
@@ -111,6 +126,8 @@ function ModelsContent() {
             <div className='min-h-0 flex-1'>
               {activeSection === 'metadata' ? (
                 <ModelsTable />
+              ) : activeSection === 'redirect' ? (
+                <ModelRedirectSection />
               ) : (
                 <DeploymentsSection />
               )}
@@ -126,6 +143,12 @@ function ModelsContent() {
       />
     </>
   )
+
+  // Provider only needed on redirect tab (primary buttons + table + drawer share state).
+  if (activeSection === 'redirect') {
+    return <ModelRedirectProvider>{page}</ModelRedirectProvider>
+  }
+  return page
 }
 
 function DeploymentsSection() {

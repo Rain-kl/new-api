@@ -51,6 +51,20 @@ func GetEnabledModels() []string {
 	var models []string
 	// Find distinct models
 	DB.Table("abilities").Where("enabled = ?", true).Distinct("model").Pluck("model", &models)
+	// Personal: append enabled model-redirect virtual names (deduped).
+	ensureModelRedirectCache()
+	seen := make(map[string]struct{}, len(models))
+	for _, m := range models {
+		seen[m] = struct{}{}
+	}
+	modelRedirectCacheMu.RLock()
+	for name := range modelRedirectCache {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		models = append(models, name)
+	}
+	modelRedirectCacheMu.RUnlock()
 	return models
 }
 

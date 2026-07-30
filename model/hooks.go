@@ -37,6 +37,46 @@ func runAfterConsumeLogHooks(c *gin.Context, log *Log, userId int, requestId str
 	}
 }
 
+// Extra models migrated into main DB (personal tables). Registered via init().
+var (
+	extraMainDBModelMu sync.Mutex
+	extraMainDBModels  []any
+)
+
+// RegisterMainDBModel adds a model to main-DB AutoMigrate. Call from init().
+// Prefer this over editing migrateDB's large model list (low merge conflict).
+func RegisterMainDBModel(m any) {
+	if m == nil {
+		return
+	}
+	extraMainDBModelMu.Lock()
+	extraMainDBModels = append(extraMainDBModels, m)
+	extraMainDBModelMu.Unlock()
+}
+
+func registeredMainDBModels() []any {
+	extraMainDBModelMu.Lock()
+	defer extraMainDBModelMu.Unlock()
+	if len(extraMainDBModels) == 0 {
+		return nil
+	}
+	out := make([]any, len(extraMainDBModels))
+	copy(out, extraMainDBModels)
+	return out
+}
+
+// migrateRegisteredMainDBModels AutoMigrates personal main-DB tables only.
+func migrateRegisteredMainDBModels() error {
+	if DB == nil {
+		return nil
+	}
+	models := registeredMainDBModels()
+	if len(models) == 0 {
+		return nil
+	}
+	return DB.AutoMigrate(models...)
+}
+
 // Extra models migrated into LOG_DB (personal SQL tables). Registered via init().
 // Not applied to ClickHouse log backends (those only use the dedicated logs table DDL).
 var (

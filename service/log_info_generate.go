@@ -87,6 +87,14 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 		other["is_model_mapped"] = true
 		other["upstream_model_name"] = relayInfo.UpstreamModelName
 	}
+	// Personal: model redirect audit fields
+	if common.GetContextKeyBool(ctx, constant.ContextKeyModelRedirectActive) {
+		if clientModel := common.GetContextKeyString(ctx, constant.ContextKeyModelRedirectClientModel); clientModel != "" {
+			other["model_redirect"] = clientModel
+		}
+		other["model_redirect_attempt"] = relayInfo.OriginModelName
+		other["model_redirect_retry_index"] = relayInfo.RetryIndex
+	}
 
 	isSystemPromptOverwritten := common.GetContextKeyBool(ctx, constant.ContextKeySystemPromptOverride)
 	if isSystemPromptOverwritten {

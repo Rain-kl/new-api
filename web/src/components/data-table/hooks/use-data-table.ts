@@ -388,7 +388,8 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
       columnSizing,
       rowSelection,
       expanded,
-      columnFilters: options.columnFilters,
+      // Toolbar always reads columnFilters.length — never leave it undefined.
+      columnFilters: options.columnFilters ?? [],
       globalFilter: options.globalFilter,
       pagination,
     },

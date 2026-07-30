@@ -357,6 +357,18 @@ func SetApiRouter(router *gin.Engine) {
 			modelsRoute.DELETE("/:id", controller.DeleteModelMeta)
 		}
 
+		// Personal: model redirect (virtual model → prioritized channel+model chain)
+		modelRedirectRoute := apiRouter.Group("/model_redirect")
+		modelRedirectRoute.Use(middleware.AdminAuth())
+		{
+			modelRedirectRoute.GET("/", controller.GetAllModelRedirects)
+			modelRedirectRoute.GET("/:id", controller.GetModelRedirect)
+			modelRedirectRoute.POST("/", controller.CreateModelRedirect)
+			modelRedirectRoute.PUT("/", controller.UpdateModelRedirect)
+			modelRedirectRoute.DELETE("/:id", controller.DeleteModelRedirect)
+			modelRedirectRoute.PUT("/:id/status", controller.UpdateModelRedirectStatus)
+		}
+
 		// Deployments (model deployment management)
 		deploymentsRoute := apiRouter.Group("/deployments")
 		deploymentsRoute.Use(middleware.AdminAuth())

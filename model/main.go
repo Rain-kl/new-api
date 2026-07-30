@@ -316,7 +316,8 @@ func migrateDB() error {
 			return err
 		}
 	}
-	return nil
+	// Personal main-DB tables (model redirect, …) via RegisterMainDBModel.
+	return migrateRegisteredMainDBModels()
 }
 
 func migrateDBFast() error {
@@ -396,6 +397,9 @@ func migrateDBFast() error {
 		if err := DB.AutoMigrate(&SubscriptionPlan{}); err != nil {
 			return err
 		}
+	}
+	if err := migrateRegisteredMainDBModels(); err != nil {
+		return err
 	}
 	common.SysLog("database migrated")
 	return nil
