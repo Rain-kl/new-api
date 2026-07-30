@@ -75,11 +75,32 @@ func ChannelType2APIType(channelType int) (int, bool) {
 		apiType = constant.APITypeReplicate
 	case constant.ChannelTypeCodex:
 		apiType = constant.APITypeCodex
-	case constant.ChannelTypeEcho:
-		apiType = constant.APITypeEcho
+	case constant.ChannelTypeAdvancedCustom:
+		apiType = constant.APITypeAdvancedCustom
+	case constant.ChannelTypeSub2API:
+		apiType = constant.APITypeSub2API
+	case constant.ChannelTypeNewAPI:
+		apiType = constant.APITypeNewAPI
 	}
 	if apiType == -1 {
+		// Personal / registered channel types (e.g. Echo) without editing this switch.
+		if t, ok := lookupExtraChannelAPIType(channelType); ok {
+			return t, true
+		}
 		return constant.APITypeOpenAI, false
 	}
 	return apiType, true
+}
+
+func IsResponsesCompactAPIType(apiType int) bool {
+	switch apiType {
+	case constant.APITypeOpenAI,
+		constant.APITypeCodex,
+		constant.APITypeAdvancedCustom,
+		constant.APITypeSub2API,
+		constant.APITypeNewAPI:
+		return true
+	default:
+		return false
+	}
 }

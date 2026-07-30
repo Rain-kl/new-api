@@ -1,0 +1,18 @@
+package constant
+
+// Personal / site-local channel & API type IDs.
+//
+// These intentionally live outside the upstream sequential blocks (and outside
+// ChannelTypeDummy / APITypeDummy) so merging upstream never collides on ID
+// assignment. Prefer the high private range 1000+ for future personal types.
+const (
+	// ChannelTypeEcho is a local debug channel that echoes the user message.
+	ChannelTypeEcho = 1000
+	// APITypeEcho pairs with ChannelTypeEcho for adaptor dispatch.
+	APITypeEcho = 1000
+)
+
+func init() {
+	// Map registration avoids editing the upstream ChannelTypeNames literal.
+	ChannelTypeNames[ChannelTypeEcho] = "Echo"
+}

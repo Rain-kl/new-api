@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/gin-gonic/gin"
 )
 
 // ConversationRecord stores the raw request body (messages) for a consume log entry.
@@ -16,6 +17,25 @@ type ConversationRecord struct {
 	RequestId string `json:"request_id" gorm:"type:varchar(64);index;default:''"`
 	Content   string `json:"content" gorm:"type:text"`
 	CreatedAt int64  `json:"created_at" gorm:"bigint;default:0"`
+}
+
+func init() {
+	// Self-register: no edits to migrate lists or RecordConsumeLog body needed beyond stable hooks.
+	RegisterLOGDBModel(&ConversationRecord{})
+	RegisterAfterConsumeLogHook(saveConversationRecordAfterConsume)
+}
+
+func saveConversationRecordAfterConsume(c *gin.Context, log *Log, userId int, requestId string) {
+	if !common.ConversationRecordEnabled || c == nil || log == nil {
+		return
+	}
+	if storage, exists := c.Get(common.KeyBodyStorage); exists && storage != nil {
+		if bs, ok := storage.(common.BodyStorage); ok {
+			if bodyBytes, err := bs.Bytes(); err == nil && len(bodyBytes) > 0 {
+				_ = SaveConversationRecord(log.Id, userId, requestId, string(bodyBytes))
+			}
+		}
+	}
 }
 
 func SaveConversationRecord(logId int, userId int, requestId string, content string) error {
