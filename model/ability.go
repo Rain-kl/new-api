@@ -44,6 +44,18 @@ func GetGroupEnabledModels(group string) []string {
 	var models []string
 	// Find distinct models
 	DB.Table("abilities").Where(commonGroupCol+" = ? and enabled = ?", group, true).Distinct("model").Pluck("model", &models)
+	// Personal: virtual models for this group (ListModels / GetUserModels / playground).
+	seen := make(map[string]struct{}, len(models)+4)
+	for _, m := range models {
+		seen[m] = struct{}{}
+	}
+	for _, name := range GetEnabledModelRedirectNamesForGroup(group) {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		models = append(models, name)
+	}
 	return models
 }
 

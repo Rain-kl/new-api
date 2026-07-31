@@ -22,6 +22,8 @@ export type ModelRedirectTarget = {
   id?: number
   redirect_id?: number
   priority: number
+  /** Reserved for future weighted LB among same priority. 0 = equal share. */
+  weight?: number
   channel_id: number
   model: string
   enabled: boolean
@@ -45,6 +47,8 @@ export type ModelRedirectInput = {
   remark?: string
   targets: Array<{
     priority: number
+    /** Reserved for future weighted LB. Omit or 0 = equal share. */
+    weight?: number
     channel_id: number
     model?: string
     enabled?: boolean

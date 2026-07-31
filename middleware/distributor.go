@@ -134,6 +134,8 @@ func Distribute() func(c *gin.Context) {
 							abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": clientModel}), types.ErrorCodeModelNotFound)
 							return
 						}
+						// LB among reachable peers only (after path/channel filter).
+						filtered = model.OrderRedirectCandidates(filtered)
 						common.SetContextKey(c, constant.ContextKeyModelRedirectActive, true)
 						common.SetContextKey(c, constant.ContextKeyModelRedirectClientModel, clientModel)
 						common.SetContextKey(c, constant.ContextKeyModelRedirectCandidates, filtered)

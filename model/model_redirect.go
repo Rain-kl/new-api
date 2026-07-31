@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"sort"
 	"strings"
 	"sync"
@@ -24,13 +25,21 @@ type ModelRedirect struct {
 
 // ModelRedirectTarget is one priority hop: channel + optional upstream model.
 // Empty Model means pass through the client virtual model name.
+//
+// Priority: larger number = higher priority. Targets with the same Priority form
+// a load-balancing pool (currently equal share; Weight is reserved for future
+// weighted balancing and is not applied yet).
 type ModelRedirectTarget struct {
 	Id         int    `json:"id" gorm:"primaryKey;autoIncrement"`
 	RedirectId int    `json:"redirect_id" gorm:"index;not null"`
-	Priority   int    `json:"priority" gorm:"not null;default:1"` // lower = higher priority
-	ChannelId  int    `json:"channel_id" gorm:"not null;index"`
-	Model      string `json:"model" gorm:"size:128;default:''"` // empty = passthrough
-	Enabled    bool   `json:"enabled" gorm:"default:true"`
+	Priority   int    `json:"priority" gorm:"not null;default:100"` // higher = preferred
+	// Weight is reserved for future weighted LB among same-priority targets.
+	// 0 means "equal share" (current behaviour). Non-zero values are stored but
+	// not yet applied at resolve time.
+	Weight    int    `json:"weight" gorm:"not null;default:0"`
+	ChannelId int    `json:"channel_id" gorm:"not null;index"`
+	Model     string `json:"model" gorm:"size:128;default:''"` // empty = passthrough
+	Enabled   bool   `json:"enabled" gorm:"default:true"`
 }
 
 // RedirectCandidate is a runtime pick for one attempt.
@@ -38,6 +47,7 @@ type RedirectCandidate struct {
 	ChannelID int    `json:"channel_id"`
 	Model     string `json:"model"` // empty = passthrough client model
 	Priority  int    `json:"priority"`
+	Weight    int    `json:"weight"` // reserved; 0 = equal share among same priority
 }
 
 type modelRedirectCacheEntry struct {
@@ -58,11 +68,30 @@ func init() {
 
 // ----- cache -----
 
+const (
+	modelRedirectMaxPriority   = 1_000_000
+	modelRedirectMaxTargets    = 64
+	modelRedirectMaxModelLen   = 128
+	modelRedirectMaxRemarkLen  = 255
+	modelRedirectDefaultPrio   = 100
+)
+
 func InvalidateModelRedirectCache() {
 	modelRedirectCacheMu.Lock()
 	modelRedirectCache = nil
 	modelRedirectLoaded = false
 	modelRedirectCacheMu.Unlock()
+	// Model plaza /api/pricing is cached for ~1min; drop it when redirects change.
+	InvalidatePricingCache()
+}
+
+func sortModelRedirectTargets(targets []ModelRedirectTarget) {
+	sort.SliceStable(targets, func(i, j int) bool {
+		if targets[i].Priority != targets[j].Priority {
+			return targets[i].Priority > targets[j].Priority
+		}
+		return targets[i].Id < targets[j].Id
+	})
 }
 
 func buildModelRedirectCacheMap() (map[string]*modelRedirectCacheEntry, error) {
@@ -77,14 +106,17 @@ func buildModelRedirectCacheMap() (map[string]*modelRedirectCacheEntry, error) {
 	next := make(map[string]*modelRedirectCacheEntry, len(rows))
 	for i := range rows {
 		r := &rows[i]
+		name := strings.TrimSpace(r.Name)
+		if name == "" {
+			continue
+		}
 		entry := &modelRedirectCacheEntry{
 			Groups:  parseGroupSet(r.Groups),
 			Targets: make([]RedirectCandidate, 0, len(r.Targets)),
 		}
 		targets := append([]ModelRedirectTarget(nil), r.Targets...)
-		sort.Slice(targets, func(i, j int) bool {
-			return targets[i].Priority < targets[j].Priority
-		})
+		// Cache keeps higher priority first; same-priority order is rebalanced at resolve.
+		sortModelRedirectTargets(targets)
 		for _, t := range targets {
 			if !t.Enabled || t.ChannelId <= 0 {
 				continue
@@ -93,12 +125,13 @@ func buildModelRedirectCacheMap() (map[string]*modelRedirectCacheEntry, error) {
 				ChannelID: t.ChannelId,
 				Model:     strings.TrimSpace(t.Model),
 				Priority:  t.Priority,
+				Weight:    t.Weight,
 			})
 		}
-		if len(entry.Targets) == 0 {
+		if len(entry.Targets) == 0 || len(entry.Groups) == 0 {
 			continue
 		}
-		next[strings.TrimSpace(r.Name)] = entry
+		next[name] = entry
 	}
 	return next, nil
 }
@@ -129,8 +162,12 @@ func ensureModelRedirectCache() {
 	}
 	next, err := buildModelRedirectCacheMap()
 	if err != nil {
+		// Do not mark loaded: allow the next request to retry after a transient DB error.
 		common.SysLog("load model redirect cache failed: " + err.Error())
-		next = map[string]*modelRedirectCacheEntry{}
+		if modelRedirectCache == nil {
+			modelRedirectCache = map[string]*modelRedirectCacheEntry{}
+		}
+		return
 	}
 	modelRedirectCache = next
 	modelRedirectLoaded = true
@@ -155,8 +192,11 @@ func groupSetContains(set map[string]struct{}, group string) bool {
 	return ok
 }
 
-// ResolveModelRedirect returns ordered candidates when clientModel is a virtual
-// model enabled for usingGroup. ok=false means "not a redirect model".
+// ResolveModelRedirect returns a defensive copy of candidates when clientModel
+// is a virtual model enabled for usingGroup. ok=false means "not a redirect model".
+//
+// Order is priority DESC (stable). Call OrderRedirectCandidates after filtering
+// inaccessible channels so same-priority load balancing only covers live peers.
 func ResolveModelRedirect(clientModel, usingGroup string) (cands []RedirectCandidate, ok bool) {
 	clientModel = strings.TrimSpace(clientModel)
 	usingGroup = strings.TrimSpace(usingGroup)
@@ -166,16 +206,73 @@ func ResolveModelRedirect(clientModel, usingGroup string) (cands []RedirectCandi
 	ensureModelRedirectCache()
 	modelRedirectCacheMu.RLock()
 	entry := modelRedirectCache[clientModel]
-	modelRedirectCacheMu.RUnlock()
-	if entry == nil || len(entry.Targets) == 0 {
+	if entry == nil || len(entry.Targets) == 0 || !groupSetContains(entry.Groups, usingGroup) {
+		modelRedirectCacheMu.RUnlock()
 		return nil, false
 	}
-	if !groupSetContains(entry.Groups, usingGroup) {
-		return nil, false
-	}
+	// Copy under RLock so cache invalidation cannot race with the slice header.
 	out := make([]RedirectCandidate, len(entry.Targets))
 	copy(out, entry.Targets)
+	modelRedirectCacheMu.RUnlock()
 	return out, true
+}
+
+// OrderRedirectCandidates sorts by priority DESC and load-balances equal-priority
+// peers (equal share shuffle). Weight is stored for forward-compat but not applied yet.
+// Prefer calling this after FilterRedirectCandidates so LB only covers usable hops.
+func OrderRedirectCandidates(cands []RedirectCandidate) []RedirectCandidate {
+	return orderRedirectCandidates(cands)
+}
+
+// orderRedirectCandidates sorts by priority DESC and load-balances equal-priority
+// peers. Weight is accepted on candidates for forward-compat but equal share is
+// used until weighted LB is implemented.
+func orderRedirectCandidates(cands []RedirectCandidate) []RedirectCandidate {
+	if len(cands) == 0 {
+		return nil
+	}
+	if len(cands) == 1 {
+		return []RedirectCandidate{cands[0]}
+	}
+	// Work on a copy so callers can safely pass cache-backed or shared slices.
+	work := make([]RedirectCandidate, len(cands))
+	copy(work, cands)
+
+	type prioGroup struct {
+		priority int
+		items    []RedirectCandidate
+	}
+	groups := make([]prioGroup, 0, 4)
+	indexByPrio := make(map[int]int, len(work))
+	for _, c := range work {
+		if idx, ok := indexByPrio[c.Priority]; ok {
+			groups[idx].items = append(groups[idx].items, c)
+			continue
+		}
+		indexByPrio[c.Priority] = len(groups)
+		groups = append(groups, prioGroup{
+			priority: c.Priority,
+			items:    []RedirectCandidate{c},
+		})
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		return groups[i].priority > groups[j].priority
+	})
+	out := make([]RedirectCandidate, 0, len(work))
+	for i := range groups {
+		// Equal-share shuffle. Future: weighted pick using groups[i].items[].Weight.
+		shuffleRedirectCandidatesEqual(groups[i].items)
+		out = append(out, groups[i].items...)
+	}
+	return out
+}
+
+func shuffleRedirectCandidatesEqual(cands []RedirectCandidate) {
+	// Fisher–Yates; rand/v2 is concurrency-safe.
+	for i := len(cands) - 1; i > 0; i-- {
+		j := rand.IntN(i + 1)
+		cands[i], cands[j] = cands[j], cands[i]
+	}
 }
 
 // AttemptModel returns the model name for one hop (passthrough if empty).
@@ -262,6 +359,9 @@ type ModelRedirectInput struct {
 
 type ModelRedirectTargetInput struct {
 	Priority  int    `json:"priority"`
+	// Weight is optional/reserved for future weighted LB among same priority.
+	// 0 or omitted = equal share (current behaviour).
+	Weight    *int   `json:"weight,omitempty"`
 	ChannelId int    `json:"channel_id"`
 	Model     string `json:"model"`
 	Enabled   *bool  `json:"enabled"`
@@ -292,17 +392,28 @@ func validateModelRedirectInput(in *ModelRedirectInput, isCreate bool) error {
 	if name == "" {
 		return fmt.Errorf("model name is required")
 	}
-	if len(name) > 128 {
+	if len(name) > modelRedirectMaxModelLen {
 		return fmt.Errorf("model name too long")
+	}
+	if strings.ContainsAny(name, ",\n\r\t") {
+		return fmt.Errorf("model name must not contain commas or whitespace control characters")
 	}
 	groups := normalizeGroupList(in.Groups)
 	if groups == "" {
 		return fmt.Errorf("at least one group is required")
 	}
+	if len(in.Remark) > modelRedirectMaxRemarkLen {
+		return fmt.Errorf("remark too long (max %d)", modelRedirectMaxRemarkLen)
+	}
 	if len(in.Targets) == 0 {
 		return fmt.Errorf("at least one redirect target is required")
 	}
-	prioSeen := make(map[int]struct{})
+	if len(in.Targets) > modelRedirectMaxTargets {
+		return fmt.Errorf("too many targets (max %d)", modelRedirectMaxTargets)
+	}
+
+	hasEnabled := false
+	// Same Priority is allowed (equal load balancing among that tier).
 	for i, t := range in.Targets {
 		if t.ChannelId <= 0 {
 			return fmt.Errorf("target[%d]: channel_id is required", i)
@@ -310,14 +421,26 @@ func validateModelRedirectInput(in *ModelRedirectInput, isCreate bool) error {
 		if _, err := GetChannelById(t.ChannelId, false); err != nil {
 			return fmt.Errorf("target[%d]: channel %d not found", i, t.ChannelId)
 		}
-		p := t.Priority
-		if p <= 0 {
-			p = i + 1
+		if t.Priority > modelRedirectMaxPriority {
+			return fmt.Errorf("target[%d]: priority too large (max %d)", i, modelRedirectMaxPriority)
 		}
-		if _, ok := prioSeen[p]; ok {
-			return fmt.Errorf("duplicate priority %d", p)
+		if t.Weight != nil && *t.Weight < 0 {
+			return fmt.Errorf("target[%d]: weight must be >= 0", i)
 		}
-		prioSeen[p] = struct{}{}
+		modelName := strings.TrimSpace(t.Model)
+		if len(modelName) > modelRedirectMaxModelLen {
+			return fmt.Errorf("target[%d]: model name too long", i)
+		}
+		enabled := true
+		if t.Enabled != nil {
+			enabled = *t.Enabled
+		}
+		if enabled {
+			hasEnabled = true
+		}
+	}
+	if !hasEnabled {
+		return fmt.Errorf("at least one enabled target is required")
 	}
 	if isCreate {
 		var count int64
@@ -341,9 +464,7 @@ func GetAllModelRedirects() ([]*ModelRedirect, error) {
 		if r == nil {
 			continue
 		}
-		sort.Slice(r.Targets, func(i, j int) bool {
-			return r.Targets[i].Priority < r.Targets[j].Priority
-		})
+		sortModelRedirectTargets(r.Targets)
 	}
 	return rows, nil
 }
@@ -354,10 +475,66 @@ func GetModelRedirectById(id int) (*ModelRedirect, error) {
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(row.Targets, func(i, j int) bool {
-		return row.Targets[i].Priority < row.Targets[j].Priority
-	})
+	sortModelRedirectTargets(row.Targets)
 	return &row, nil
+}
+
+func normalizeTargetPriority(p int, index int) int {
+	if p > 0 {
+		if p > modelRedirectMaxPriority {
+			return modelRedirectMaxPriority
+		}
+		return p
+	}
+	// Fallback when client omits priority: descending-friendly defaults, always >= 1.
+	v := modelRedirectDefaultPrio - index
+	if v < 1 {
+		return 1
+	}
+	return v
+}
+
+func normalizeTargetWeight(w *int) int {
+	if w == nil || *w < 0 {
+		return 0
+	}
+	return *w
+}
+
+func normalizeRemark(remark string) string {
+	if len(remark) > modelRedirectMaxRemarkLen {
+		return remark[:modelRedirectMaxRemarkLen]
+	}
+	return remark
+}
+
+// buildTargetsFromInput normalizes and de-duplicates targets
+// (same priority + channel + model + enabled).
+func buildTargetsFromInput(inTargets []ModelRedirectTargetInput, redirectId int) []ModelRedirectTarget {
+	out := make([]ModelRedirectTarget, 0, len(inTargets))
+	seen := make(map[string]struct{}, len(inTargets))
+	for i, t := range inTargets {
+		te := true
+		if t.Enabled != nil {
+			te = *t.Enabled
+		}
+		modelName := strings.TrimSpace(t.Model)
+		p := normalizeTargetPriority(t.Priority, i)
+		key := fmt.Sprintf("%d|%d|%s|%t", p, t.ChannelId, modelName, te)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, ModelRedirectTarget{
+			RedirectId: redirectId,
+			Priority:   p,
+			Weight:     normalizeTargetWeight(t.Weight),
+			ChannelId:  t.ChannelId,
+			Model:      modelName,
+			Enabled:    te,
+		})
+	}
+	return out
 }
 
 func CreateModelRedirect(in *ModelRedirectInput) (*ModelRedirect, error) {
@@ -369,29 +546,18 @@ func CreateModelRedirect(in *ModelRedirectInput) (*ModelRedirect, error) {
 	if in.Enabled != nil {
 		enabled = *in.Enabled
 	}
+	targets := buildTargetsFromInput(in.Targets, 0)
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("at least one redirect target is required")
+	}
 	row := &ModelRedirect{
 		Name:      strings.TrimSpace(in.Name),
 		Groups:    normalizeGroupList(in.Groups),
 		Enabled:   enabled,
-		Remark:    in.Remark,
+		Remark:    normalizeRemark(in.Remark),
 		CreatedAt: now,
 		UpdatedAt: now,
-	}
-	for i, t := range in.Targets {
-		p := t.Priority
-		if p <= 0 {
-			p = i + 1
-		}
-		te := true
-		if t.Enabled != nil {
-			te = *t.Enabled
-		}
-		row.Targets = append(row.Targets, ModelRedirectTarget{
-			Priority:  p,
-			ChannelId: t.ChannelId,
-			Model:     strings.TrimSpace(t.Model),
-			Enabled:   te,
-		})
+		Targets:   targets,
 	}
 	if err := DB.Create(row).Error; err != nil {
 		return nil, err
@@ -422,6 +588,10 @@ func UpdateModelRedirect(id int, in *ModelRedirectInput) (*ModelRedirect, error)
 	if in.Enabled != nil {
 		enabled = *in.Enabled
 	}
+	targets := buildTargetsFromInput(in.Targets, id)
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("at least one redirect target is required")
+	}
 	tx := DB.Begin()
 	if tx.Error != nil {
 		return nil, tx.Error
@@ -430,7 +600,7 @@ func UpdateModelRedirect(id int, in *ModelRedirectInput) (*ModelRedirect, error)
 		"name":       name,
 		"groups":     normalizeGroupList(in.Groups),
 		"enabled":    enabled,
-		"remark":     in.Remark,
+		"remark":     normalizeRemark(in.Remark),
 		"updated_at": common.GetTimestamp(),
 	}).Error; err != nil {
 		tx.Rollback()
@@ -440,23 +610,8 @@ func UpdateModelRedirect(id int, in *ModelRedirectInput) (*ModelRedirect, error)
 		tx.Rollback()
 		return nil, err
 	}
-	for i, t := range in.Targets {
-		p := t.Priority
-		if p <= 0 {
-			p = i + 1
-		}
-		te := true
-		if t.Enabled != nil {
-			te = *t.Enabled
-		}
-		target := ModelRedirectTarget{
-			RedirectId: id,
-			Priority:   p,
-			ChannelId:  t.ChannelId,
-			Model:      strings.TrimSpace(t.Model),
-			Enabled:    te,
-		}
-		if err := tx.Create(&target).Error; err != nil {
+	for i := range targets {
+		if err := tx.Create(&targets[i]).Error; err != nil {
 			tx.Rollback()
 			return nil, err
 		}
@@ -513,4 +668,90 @@ func GetEnabledModelRedirectNamesForGroup(group string) []string {
 		}
 	}
 	return names
+}
+
+// IsModelRedirectVirtual reports whether name is an enabled virtual model redirect.
+func IsModelRedirectVirtual(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	ensureModelRedirectCache()
+	modelRedirectCacheMu.RLock()
+	_, ok := modelRedirectCache[name]
+	modelRedirectCacheMu.RUnlock()
+	return ok
+}
+
+// ModelRedirectEnableGroups returns groups that can use the virtual model.
+func ModelRedirectEnableGroups(name string) []string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	ensureModelRedirectCache()
+	modelRedirectCacheMu.RLock()
+	entry := modelRedirectCache[name]
+	modelRedirectCacheMu.RUnlock()
+	if entry == nil {
+		return nil
+	}
+	out := make([]string, 0, len(entry.Groups))
+	for g := range entry.Groups {
+		out = append(out, g)
+	}
+	return out
+}
+
+// ModelRedirectDisplaySourceModel returns the first (highest-priority) target model
+// or the virtual name for pricing/display when the virtual name itself has no ratio/price.
+func ModelRedirectDisplaySourceModel(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	ensureModelRedirectCache()
+	modelRedirectCacheMu.RLock()
+	entry := modelRedirectCache[name]
+	if entry == nil || len(entry.Targets) == 0 {
+		modelRedirectCacheMu.RUnlock()
+		return name
+	}
+	first := entry.Targets[0]
+	modelRedirectCacheMu.RUnlock()
+	return AttemptModel(name, first)
+}
+
+// ForEachEnabledModelRedirect walks enabled virtual models (name + groups + first target).
+// Callback runs without holding the cache lock so callers may do heavier work safely.
+func ForEachEnabledModelRedirect(fn func(name string, groups []string, displaySource string)) {
+	if fn == nil {
+		return
+	}
+	ensureModelRedirectCache()
+	modelRedirectCacheMu.RLock()
+	type snap struct {
+		name          string
+		groups        []string
+		displaySource string
+	}
+	items := make([]snap, 0, len(modelRedirectCache))
+	for name, entry := range modelRedirectCache {
+		if entry == nil || len(entry.Targets) == 0 {
+			continue
+		}
+		groups := make([]string, 0, len(entry.Groups))
+		for g := range entry.Groups {
+			groups = append(groups, g)
+		}
+		items = append(items, snap{
+			name:          name,
+			groups:        groups,
+			displaySource: AttemptModel(name, entry.Targets[0]),
+		})
+	}
+	modelRedirectCacheMu.RUnlock()
+	for _, it := range items {
+		fn(it.name, it.groups, it.displaySource)
+	}
 }

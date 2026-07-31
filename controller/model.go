@@ -238,7 +238,8 @@ func ListModels(c *gin.Context, modelType int) {
 		}
 		for allowModel, _ := range tokenModelLimit {
 			if !acceptUnsetRatioModel {
-				if !helper.HasModelBillingConfig(allowModel) {
+				// Virtual redirect models bill by actual hop; allow listing without own price map.
+				if !helper.HasModelBillingConfig(allowModel) && !model.IsModelRedirectVirtual(allowModel) {
 					continue
 				}
 			}
@@ -248,7 +249,8 @@ func ListModels(c *gin.Context, modelType int) {
 		models := service.GetGroupsEnabledModels(ownerGroups)
 		for _, modelName := range models {
 			if !acceptUnsetRatioModel {
-				if !helper.HasModelBillingConfig(modelName) {
+				// Virtual redirect models bill by actual hop; allow listing without own price map.
+				if !helper.HasModelBillingConfig(modelName) && !model.IsModelRedirectVirtual(modelName) {
 					continue
 				}
 			}

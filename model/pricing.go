@@ -269,6 +269,18 @@ func updatePricing() {
 		groups.Add(ability.Group)
 	}
 
+	// Personal: virtual models from model redirect (for model marketplace / pricing).
+	ForEachEnabledModelRedirect(func(name string, groups []string, _ string) {
+		set, ok := modelGroupsMap[name]
+		if !ok {
+			set = types.NewSet[string]()
+			modelGroupsMap[name] = set
+		}
+		for _, g := range groups {
+			set.Add(g)
+		}
+	})
+
 	//这里使用切片而不是Set，因为一个模型可能支持多个端点类型，并且第一个端点是优先使用端点
 	modelSupportEndpointsStr := make(map[string][]string)
 	advancedCustomConfigs := loadPricingAdvancedCustomConfigs(enableAbilities)
@@ -284,6 +296,21 @@ func updatePricing() {
 		}
 		modelSupportEndpointsStr[ability.Model] = endpoints
 	}
+
+	// Personal: virtual models default to OpenAI chat endpoint if none inferred.
+	ForEachEnabledModelRedirect(func(name string, _ []string, displaySource string) {
+		if len(modelSupportEndpointsStr[name]) > 0 {
+			return
+		}
+		// Prefer endpoints of the first-hop display source model when available.
+		if src := modelSupportEndpointsStr[displaySource]; len(src) > 0 {
+			copied := make([]string, len(src))
+			copy(copied, src)
+			modelSupportEndpointsStr[name] = copied
+			return
+		}
+		modelSupportEndpointsStr[name] = []string{string(constant.EndpointTypeOpenAI)}
+	})
 
 	// 再补充模型自定义端点：若配置有效则追加到已有推断，不再裁剪渠道真实能力
 	for modelName, meta := range metaMap {
@@ -373,35 +400,42 @@ func updatePricing() {
 			pricing.Tags = meta.Tags
 			pricing.VendorID = meta.VendorID
 		}
-		modelPrice, findPrice := ratio_setting.GetModelPrice(model, false)
+		// Virtual models may not have their own ratio/price; fall back to first-hop target.
+		billingName := model
+		if IsModelRedirectVirtual(model) {
+			if src := ModelRedirectDisplaySourceModel(model); src != "" {
+				billingName = src
+			}
+		}
+		modelPrice, findPrice := ratio_setting.GetModelPrice(billingName, false)
 		if findPrice {
 			pricing.ModelPrice = modelPrice
 			pricing.QuotaType = 1
 		} else {
-			modelRatio, _, _ := ratio_setting.GetModelRatio(model)
+			modelRatio, _, _ := ratio_setting.GetModelRatio(billingName)
 			pricing.ModelRatio = modelRatio
-			pricing.CompletionRatio = ratio_setting.GetCompletionRatio(model)
+			pricing.CompletionRatio = ratio_setting.GetCompletionRatio(billingName)
 			pricing.QuotaType = 0
 		}
-		if cacheRatio, ok := ratio_setting.GetCacheRatio(model); ok {
+		if cacheRatio, ok := ratio_setting.GetCacheRatio(billingName); ok {
 			pricing.CacheRatio = &cacheRatio
 		}
-		if createCacheRatio, ok := ratio_setting.GetCreateCacheRatio(model); ok {
+		if createCacheRatio, ok := ratio_setting.GetCreateCacheRatio(billingName); ok {
 			pricing.CreateCacheRatio = &createCacheRatio
 		}
-		if imageRatio, ok := ratio_setting.GetImageRatio(model); ok {
+		if imageRatio, ok := ratio_setting.GetImageRatio(billingName); ok {
 			pricing.ImageRatio = &imageRatio
 		}
-		if ratio_setting.ContainsAudioRatio(model) {
-			audioRatio := ratio_setting.GetAudioRatio(model)
+		if ratio_setting.ContainsAudioRatio(billingName) {
+			audioRatio := ratio_setting.GetAudioRatio(billingName)
 			pricing.AudioRatio = &audioRatio
 		}
-		if ratio_setting.ContainsAudioCompletionRatio(model) {
-			audioCompletionRatio := ratio_setting.GetAudioCompletionRatio(model)
+		if ratio_setting.ContainsAudioCompletionRatio(billingName) {
+			audioCompletionRatio := ratio_setting.GetAudioCompletionRatio(billingName)
 			pricing.AudioCompletionRatio = &audioCompletionRatio
 		}
-		if billingMode := billing_setting.GetBillingMode(model); billingMode == "tiered_expr" {
-			if expr, ok := billing_setting.GetBillingExpr(model); ok && strings.TrimSpace(expr) != "" {
+		if billingMode := billing_setting.GetBillingMode(billingName); billingMode == "tiered_expr" {
+			if expr, ok := billing_setting.GetBillingExpr(billingName); ok && strings.TrimSpace(expr) != "" {
 				pricing.BillingMode = billingMode
 				pricing.BillingExpr = expr
 			}
