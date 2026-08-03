@@ -238,6 +238,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		if newAPIError == nil {
 			relayInfo.LastError = nil
+			// Personal model-redirect: success clears hop temporary cooldown.
+			// Key uses hop-start attempt model (context), not post-handler OriginModelName.
+			if common.GetContextKeyBool(c, constant.ContextKeyModelRedirectActive) {
+				if hopModel := modelRedirectHopAttemptModel(c); hopModel != "" {
+					model.ClearModelRedirectHopCooldown(channel.Id, hopModel)
+				}
+			}
 			return
 		}
 
@@ -245,6 +252,16 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relayInfo.LastError = newAPIError
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+
+		// Personal model-redirect: cool hop on hop-unavailability failures only
+		// (1m * fails, max 30m). Affects subsequent requests' selection, not
+		// remaining hops in this request's candidate list.
+		if common.GetContextKeyBool(c, constant.ContextKeyModelRedirectActive) &&
+			shouldCoolModelRedirectHop(newAPIError) {
+			if hopModel := modelRedirectHopAttemptModel(c); hopModel != "" {
+				model.RecordModelRedirectHopFailure(channel.Id, hopModel)
+			}
+		}
 
 		if !shouldRetry(c, newAPIError, maxRetry-retryParam.GetRetry()) {
 			break
@@ -403,6 +420,54 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		return nil, newAPIError
 	}
 	return channel, nil
+}
+
+// modelRedirectHopAttemptModel is the stable hop model used for cooldown keys.
+// Matches FilterRedirectCooldownDown / SetupContextForSelectedChannel (original_model),
+// not RelayInfo.OriginModelName which some adaptors rewrite mid-hop.
+func modelRedirectHopAttemptModel(c *gin.Context) string {
+	if m := common.GetContextKeyString(c, constant.ContextKeyOriginalModel); m != "" {
+		return m
+	}
+	if m := c.GetString("original_model"); m != "" {
+		return m
+	}
+	return ""
+}
+
+// shouldCoolModelRedirectHop reports whether the error indicates hop/upstream
+// unavailability (independent of remaining retry budget). Client/local skip-retry
+// errors do not cool a hop.
+func shouldCoolModelRedirectHop(openaiErr *types.NewAPIError) bool {
+	if openaiErr == nil {
+		return false
+	}
+	if types.IsSkipRetryError(openaiErr) {
+		return false
+	}
+	if types.IsChannelError(openaiErr) {
+		return true
+	}
+	if operation_setting.IsAlwaysSkipRetryCode(openaiErr.GetErrorCode()) {
+		return false
+	}
+	code := openaiErr.StatusCode
+	if code >= 200 && code < 300 {
+		return false
+	}
+	if code < 100 || code > 599 {
+		return true
+	}
+	// Same HA set as model-redirect shouldRetry branch (401/403/404/429/408/5xx).
+	if code == http.StatusUnauthorized ||
+		code == http.StatusForbidden ||
+		code == http.StatusNotFound ||
+		code == http.StatusTooManyRequests ||
+		code == http.StatusRequestTimeout ||
+		code >= http.StatusInternalServerError {
+		return true
+	}
+	return operation_setting.ShouldRetryByStatusCode(code)
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {

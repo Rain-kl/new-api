@@ -54,11 +54,13 @@ func tryModelRedirectSelection(
 		c.Request.URL.Path,
 		channelSupportsRequestPath,
 	)
+	// Skip hops temporarily disabled after recent failures (1m * fails, max 30m).
+	filtered = model.FilterRedirectCooldownDown(filtered, clientModel)
 	if len(filtered) == 0 {
 		abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": clientModel}), types.ErrorCodeModelNotFound)
 		return nil, "", "", true, true
 	}
-	// LB among reachable peers only (after path/channel filter).
+	// LB among reachable peers only (after path/channel/cooldown filter).
 	filtered = model.OrderRedirectCandidates(filtered)
 	common.SetContextKey(c, constant.ContextKeyModelRedirectActive, true)
 	common.SetContextKey(c, constant.ContextKeyModelRedirectClientModel, clientModel)
