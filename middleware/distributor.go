@@ -102,53 +102,17 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 
-				// Personal: model redirect (virtual model → ordered channel+model list).
+				// Personal: model redirect (logic in model_redirect.go — keep call site thin).
 				// Precedence over affinity. specific_channel_id already skipped this branch.
 				if channel == nil {
-					clientModel := modelRequest.Model
-					effectiveGroup := usingGroup
-					var cands []model.RedirectCandidate
-					var ok bool
-					if usingGroup == "auto" {
-						// Virtual rules are bound to real groups; try user auto groups in order.
-						userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-						for _, g := range service.GetUserAutoGroup(userGroup) {
-							if cands, ok = model.ResolveModelRedirect(clientModel, g); ok {
-								effectiveGroup = g
-								common.SetContextKey(c, constant.ContextKeyAutoGroup, g)
-								break
-							}
-						}
-					} else {
-						cands, ok = model.ResolveModelRedirect(clientModel, usingGroup)
+					ch, sg, attemptModel, handled, aborted := tryModelRedirectSelection(c, modelRequest.Model, usingGroup)
+					if aborted {
+						return
 					}
-					if ok {
-						filtered := model.FilterRedirectCandidates(
-							cands,
-							clientModel,
-							effectiveGroup,
-							c.Request.URL.Path,
-							channelSupportsRequestPath,
-						)
-						if len(filtered) == 0 {
-							abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": clientModel}), types.ErrorCodeModelNotFound)
-							return
-						}
-						// LB among reachable peers only (after path/channel filter).
-						filtered = model.OrderRedirectCandidates(filtered)
-						common.SetContextKey(c, constant.ContextKeyModelRedirectActive, true)
-						common.SetContextKey(c, constant.ContextKeyModelRedirectClientModel, clientModel)
-						common.SetContextKey(c, constant.ContextKeyModelRedirectCandidates, filtered)
-						first := filtered[0]
-						ch, chErr := model.GetChannelForRedirect(first.ChannelID)
-						if chErr != nil || ch == nil {
-							abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": clientModel}), types.ErrorCodeModelNotFound)
-							return
-						}
+					if handled {
 						channel = ch
-						selectGroup = effectiveGroup
-						// Billing/upstream identity for this hop is the attempt model.
-						modelRequest.Model = model.AttemptModel(clientModel, first)
+						selectGroup = sg
+						modelRequest.Model = attemptModel
 					}
 				}
 
@@ -160,7 +124,7 @@ func Distribute() func(c *gin.Context) {
 							channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) {
 							if usingGroup == "auto" {
 								userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-								autoGroups := service.GetUserAutoGroup(userGroup)
+								autoGroups := service.GetRequestAutoGroups(c, userGroup)
 								for _, g := range autoGroups {
 									if model.IsChannelEnabledForGroupModel(g, modelRequest.Model, preferred.Id) {
 										selectGroup = g
