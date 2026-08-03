@@ -8,7 +8,7 @@ DEV_POSTGRES_DB = new-api
 DEV_POSTGRES_USER = root
 DEV_SQLITE_PATH ?= one-api.db
 
-.PHONY: all build-web build-all-web start-api dev dev-api dev-api-rebuild dev-web reset-setup test
+.PHONY: all build-web build-all-web start-api dev dev-api dev-api-rebuild dev-web reset-setup test canary
 
 all: build-all-web start-api
 
@@ -47,6 +47,34 @@ test:
 		GOWORK=off go test $$root_packages
 	@echo "Testing relaykit Go module..."
 	@cd relaykit && GOWORK=off go test ./...
+
+# Merge local feat into Canary, push Canary, then restore the previous branch.
+# Does not leave the working tree on Canary when started from another branch.
+canary:
+	@set -e; \
+	if ! git rev-parse --git-dir >/dev/null 2>&1; then \
+		echo "Error: not a git repository"; exit 1; \
+	fi; \
+	if [ -n "$$(git status --porcelain)" ]; then \
+		echo "Error: working tree is dirty; commit or stash first"; exit 1; \
+	fi; \
+	orig=$$(git rev-parse --abbrev-ref HEAD); \
+	if [ "$$orig" = "HEAD" ]; then \
+		echo "Error: detached HEAD; checkout a branch first"; exit 1; \
+	fi; \
+	cleanup() { \
+		cur=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true); \
+		if [ "$$cur" != "$$orig" ]; then \
+			echo "Restoring branch $$orig..."; \
+			git checkout -q "$$orig"; \
+		fi; \
+	}; \
+	trap cleanup EXIT; \
+	echo "Merging feat -> Canary (started from $$orig)..."; \
+	git checkout Canary; \
+	git merge --no-edit feat; \
+	git push -u origin Canary; \
+	echo "Done: feat merged into Canary and pushed."
 
 reset-setup:
 	@echo "Resetting local setup wizard state..."
