@@ -180,3 +180,11 @@ jobs:
 #            -t ghcr.io/${GHCR_REPOSITORY}:latest \
 #            ghcr.io/${GHCR_REPOSITORY}:latest-amd64 \
 #            ghcr.io/${GHCR_REPOSITORY}:latest-arm64
+
+  notify_deploy:
+    name: Trigger deploy webhook
+    needs: [create_manifests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: GET deploy webhook
+        run: curl -fsS "${{ secrets.DEPLOY_WEBHOOK_URL }}"
