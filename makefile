@@ -48,8 +48,8 @@ test:
 	@echo "Testing relaykit Go module..."
 	@cd relaykit && GOWORK=off go test ./...
 
-# Merge local feat into Canary, push Canary, then restore the previous branch.
-# Does not leave the working tree on Canary when started from another branch.
+# Merge local feat into canary, push canary, then restore the previous branch.
+# Does not leave the working tree on canary when started from another branch.
 canary:
 	@set -e; \
 	if ! git rev-parse --git-dir >/dev/null 2>&1; then \
@@ -70,11 +70,11 @@ canary:
 		fi; \
 	}; \
 	trap cleanup EXIT; \
-	echo "Merging feat -> Canary (started from $$orig)..."; \
-	git checkout Canary; \
+	echo "Merging feat -> canary (started from $$orig)..."; \
+	git checkout canary; \
 	git merge --no-edit feat; \
-	git push -u origin Canary; \
-	echo "Done: feat merged into Canary and pushed."
+	git push -u origin canary; \
+	echo "Done: feat merged into canary and pushed."
 
 reset-setup:
 	@echo "Resetting local setup wizard state..."
