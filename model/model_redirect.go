@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 )
 
 // ModelRedirect is a virtual model name with an ordered channel+model fallback chain.
@@ -50,6 +51,10 @@ type RedirectCandidate struct {
 	Weight    int    `json:"weight"` // reserved; 0 = equal share among same priority
 }
 
+func (c RedirectCandidate) IsNestedRedirect() bool {
+	return c.ChannelID == constant.ModelRedirectSentinelChannelID
+}
+
 type modelRedirectCacheEntry struct {
 	Groups  map[string]struct{}
 	Targets []RedirectCandidate
@@ -69,11 +74,13 @@ func init() {
 // ----- cache -----
 
 const (
-	modelRedirectMaxPriority   = 1_000_000
-	modelRedirectMaxTargets    = 64
-	modelRedirectMaxModelLen   = 128
-	modelRedirectMaxRemarkLen  = 255
-	modelRedirectDefaultPrio   = 100
+	modelRedirectMaxPriority           = 1_000_000
+	modelRedirectMaxTargets            = 64
+	modelRedirectMaxModelLen           = 128
+	modelRedirectMaxRemarkLen          = 255
+	modelRedirectDefaultPrio           = 100
+	modelRedirectMaxExpandDepth        = 32
+	modelRedirectMaxExpandedCandidates = 128
 )
 
 func InvalidateModelRedirectCache() {
@@ -118,12 +125,28 @@ func buildModelRedirectCacheMap() (map[string]*modelRedirectCacheEntry, error) {
 		// Cache keeps higher priority first; same-priority order is rebalanced at resolve.
 		sortModelRedirectTargets(targets)
 		for _, t := range targets {
-			if !t.Enabled || t.ChannelId <= 0 {
+			if !t.Enabled {
+				continue
+			}
+			modelName := strings.TrimSpace(t.Model)
+			if t.ChannelId == constant.ModelRedirectSentinelChannelID {
+				if modelName == "" {
+					continue
+				}
+				entry.Targets = append(entry.Targets, RedirectCandidate{
+					ChannelID: constant.ModelRedirectSentinelChannelID,
+					Model:     modelName,
+					Priority:  t.Priority,
+					Weight:    t.Weight,
+				})
+				continue
+			}
+			if t.ChannelId <= 0 {
 				continue
 			}
 			entry.Targets = append(entry.Targets, RedirectCandidate{
 				ChannelID: t.ChannelId,
-				Model:     strings.TrimSpace(t.Model),
+				Model:     modelName,
 				Priority:  t.Priority,
 				Weight:    t.Weight,
 			})
@@ -192,11 +215,71 @@ func groupSetContains(set map[string]struct{}, group string) bool {
 	return ok
 }
 
-// ResolveModelRedirect returns a defensive copy of candidates when clientModel
-// is a virtual model enabled for usingGroup. ok=false means "not a redirect model".
+// expandModelRedirectTargets recursively expands nested virtual-model refs
+// (sentinel ChannelID) into a flat list of real-channel candidates.
+// Black-box order: full child chain before the parent's next target.
+// Caller must not hold modelRedirectCacheMu; this function takes RLock as needed.
+func expandModelRedirectTargets(name, usingGroup string, depth int, stack map[string]struct{}) []RedirectCandidate {
+	name = strings.TrimSpace(name)
+	usingGroup = strings.TrimSpace(usingGroup)
+	if name == "" || usingGroup == "" {
+		return nil
+	}
+	if depth > modelRedirectMaxExpandDepth {
+		common.SysLog(fmt.Sprintf("model redirect expand depth exceeded for %q", name))
+		return nil
+	}
+	if _, seen := stack[name]; seen {
+		common.SysLog(fmt.Sprintf("model redirect expand cycle at %q", name))
+		return nil
+	}
+	// Caller holds no lock; take RLock for entry lookup only.
+	modelRedirectCacheMu.RLock()
+	entry := modelRedirectCache[name]
+	var targets []RedirectCandidate
+	if entry != nil && groupSetContains(entry.Groups, usingGroup) && len(entry.Targets) > 0 {
+		targets = make([]RedirectCandidate, len(entry.Targets))
+		copy(targets, entry.Targets)
+	}
+	modelRedirectCacheMu.RUnlock()
+	if len(targets) == 0 {
+		return nil
+	}
+	stack[name] = struct{}{}
+	defer delete(stack, name)
+
+	out := make([]RedirectCandidate, 0, len(targets))
+	for _, t := range targets {
+		if t.IsNestedRedirect() {
+			child := strings.TrimSpace(t.Model)
+			if child == "" {
+				continue
+			}
+			nested := expandModelRedirectTargets(child, usingGroup, depth+1, stack)
+			out = append(out, nested...)
+		} else if t.ChannelID > 0 {
+			cand := t
+			if strings.TrimSpace(cand.Model) == "" {
+				cand.Model = name // owning virtual model of this cache entry
+			}
+			out = append(out, cand)
+		}
+		if len(out) >= modelRedirectMaxExpandedCandidates {
+			common.SysLog(fmt.Sprintf("model redirect expand truncated at %d for %q", modelRedirectMaxExpandedCandidates, name))
+			return out[:modelRedirectMaxExpandedCandidates]
+		}
+	}
+	return out
+}
+
+// ResolveModelRedirect returns a defensive copy of real-channel candidates when
+// clientModel is a virtual model enabled for usingGroup. Nested sentinel targets
+// are expanded black-box (full child chain before parent next target).
+// ok=false means "not a redirect model" or expand yielded no usable real hops.
 //
-// Order is priority DESC (stable). Call OrderRedirectCandidates after filtering
-// inaccessible channels so same-priority load balancing only covers live peers.
+// Order is priority DESC within each redirect's cache entry (stable). Call
+// OrderRedirectCandidates after filtering inaccessible channels so same-priority
+// load balancing only covers live peers.
 func ResolveModelRedirect(clientModel, usingGroup string) (cands []RedirectCandidate, ok bool) {
 	clientModel = strings.TrimSpace(clientModel)
 	usingGroup = strings.TrimSpace(usingGroup)
@@ -204,29 +287,36 @@ func ResolveModelRedirect(clientModel, usingGroup string) (cands []RedirectCandi
 		return nil, false
 	}
 	ensureModelRedirectCache()
+	// Copy raw targets under RLock (may include sentinels).
 	modelRedirectCacheMu.RLock()
 	entry := modelRedirectCache[clientModel]
 	if entry == nil || len(entry.Targets) == 0 || !groupSetContains(entry.Groups, usingGroup) {
 		modelRedirectCacheMu.RUnlock()
 		return nil, false
 	}
-	// Copy under RLock so cache invalidation cannot race with the slice header.
-	out := make([]RedirectCandidate, len(entry.Targets))
-	copy(out, entry.Targets)
+	// Release lock before expand (expand re-locks for children).
 	modelRedirectCacheMu.RUnlock()
+
+	stack := map[string]struct{}{}
+	out := expandModelRedirectTargets(clientModel, usingGroup, 0, stack)
+	if len(out) == 0 {
+		return nil, false
+	}
 	return out, true
 }
 
-// OrderRedirectCandidates sorts by priority DESC and load-balances equal-priority
-// peers (equal share shuffle). Weight is stored for forward-compat but not applied yet.
+// OrderRedirectCandidates preserves input candidate order (e.g. expand black-box
+// order) and load-balances only within contiguous runs of equal Priority
+// (equal-share shuffle). Weight is stored for forward-compat but not applied yet.
 // Prefer calling this after FilterRedirectCandidates so LB only covers usable hops.
 func OrderRedirectCandidates(cands []RedirectCandidate) []RedirectCandidate {
 	return orderRedirectCandidates(cands)
 }
 
-// orderRedirectCandidates sorts by priority DESC and load-balances equal-priority
-// peers. Weight is accepted on candidates for forward-compat but equal share is
-// used until weighted LB is implemented.
+// orderRedirectCandidates preserves input order and shuffles only contiguous
+// equal-Priority runs. It does not regroup non-contiguous same priorities or
+// re-sort by priority globally (required so nested expand black-box order sticks).
+// Weight is accepted for forward-compat but equal share is used until weighted LB.
 func orderRedirectCandidates(cands []RedirectCandidate) []RedirectCandidate {
 	if len(cands) == 0 {
 		return nil
@@ -238,33 +328,18 @@ func orderRedirectCandidates(cands []RedirectCandidate) []RedirectCandidate {
 	work := make([]RedirectCandidate, len(cands))
 	copy(work, cands)
 
-	type prioGroup struct {
-		priority int
-		items    []RedirectCandidate
-	}
-	groups := make([]prioGroup, 0, 4)
-	indexByPrio := make(map[int]int, len(work))
-	for _, c := range work {
-		if idx, ok := indexByPrio[c.Priority]; ok {
-			groups[idx].items = append(groups[idx].items, c)
-			continue
+	// Shuffle each contiguous equal-priority run in place; leave run boundaries fixed.
+	i := 0
+	for i < len(work) {
+		j := i + 1
+		for j < len(work) && work[j].Priority == work[i].Priority {
+			j++
 		}
-		indexByPrio[c.Priority] = len(groups)
-		groups = append(groups, prioGroup{
-			priority: c.Priority,
-			items:    []RedirectCandidate{c},
-		})
+		// Equal-share shuffle. Future: weighted pick using work[i:j].Weight.
+		shuffleRedirectCandidatesEqual(work[i:j])
+		i = j
 	}
-	sort.SliceStable(groups, func(i, j int) bool {
-		return groups[i].priority > groups[j].priority
-	})
-	out := make([]RedirectCandidate, 0, len(work))
-	for i := range groups {
-		// Equal-share shuffle. Future: weighted pick using groups[i].items[].Weight.
-		shuffleRedirectCandidatesEqual(groups[i].items)
-		out = append(out, groups[i].items...)
-	}
-	return out
+	return work
 }
 
 func shuffleRedirectCandidatesEqual(cands []RedirectCandidate) {
@@ -384,7 +459,90 @@ func normalizeGroupList(groups []string) string {
 	return strings.Join(parts, ",")
 }
 
-func validateModelRedirectInput(in *ModelRedirectInput, isCreate bool) error {
+// detectModelRedirectCycle reports whether start can reach itself via nested
+// redirect edges (DFS with path set). Missing keys are treated as no edges.
+func detectModelRedirectCycle(start string, edges map[string][]string) bool {
+	start = strings.TrimSpace(start)
+	if start == "" {
+		return false
+	}
+	path := make(map[string]struct{})
+	var visit func(node string) bool
+	visit = func(node string) bool {
+		node = strings.TrimSpace(node)
+		if node == "" {
+			return false
+		}
+		if _, onPath := path[node]; onPath {
+			return true
+		}
+		path[node] = struct{}{}
+		for _, next := range edges[node] {
+			if visit(next) {
+				return true
+			}
+		}
+		delete(path, node)
+		return false
+	}
+	return visit(start)
+}
+
+// buildModelRedirectNestedEdgeMap builds name -> nested child names from rows.
+// Only enabled targets with sentinel channel_id and non-empty model contribute edges.
+func buildModelRedirectNestedEdgeMap(rows []*ModelRedirect) map[string][]string {
+	edges := make(map[string][]string, len(rows))
+	for _, r := range rows {
+		if r == nil {
+			continue
+		}
+		name := strings.TrimSpace(r.Name)
+		if name == "" {
+			continue
+		}
+		var children []string
+		for _, t := range r.Targets {
+			if !t.Enabled {
+				continue
+			}
+			if t.ChannelId != constant.ModelRedirectSentinelChannelID {
+				continue
+			}
+			child := strings.TrimSpace(t.Model)
+			if child == "" {
+				continue
+			}
+			children = append(children, child)
+		}
+		edges[name] = children
+	}
+	return edges
+}
+
+// nestedEdgesFromInput returns enabled nested-ref child names from the save payload.
+func nestedEdgesFromInput(targets []ModelRedirectTargetInput) []string {
+	var children []string
+	for _, t := range targets {
+		enabled := true
+		if t.Enabled != nil {
+			enabled = *t.Enabled
+		}
+		if !enabled {
+			continue
+		}
+		if t.ChannelId != constant.ModelRedirectSentinelChannelID {
+			continue
+		}
+		child := strings.TrimSpace(t.Model)
+		if child == "" {
+			continue
+		}
+		children = append(children, child)
+	}
+	return children
+}
+
+func validateModelRedirectInput(in *ModelRedirectInput, isCreate bool, selfName string) error {
 	if in == nil {
 		return fmt.Errorf("invalid request")
 	}
@@ -415,21 +573,44 @@ func validateModelRedirectInput(in *ModelRedirectInput, isCreate bool) error {
 	hasEnabled := false
 	// Same Priority is allowed (equal load balancing among that tier).
 	for i, t := range in.Targets {
-		if t.ChannelId <= 0 {
-			return fmt.Errorf("target[%d]: channel_id is required", i)
-		}
-		if _, err := GetChannelById(t.ChannelId, false); err != nil {
-			return fmt.Errorf("target[%d]: channel %d not found", i, t.ChannelId)
+		modelName := strings.TrimSpace(t.Model)
+		switch {
+		case t.ChannelId == constant.ModelRedirectSentinelChannelID:
+			// Nested virtual-model ref: model required, no self-ref, child must be enabled redirect.
+			if modelName == "" {
+				return fmt.Errorf("target[%d]: nested model is required", i)
+			}
+			if len(modelName) > modelRedirectMaxModelLen {
+				return fmt.Errorf("target[%d]: model name too long", i)
+			}
+			if modelName == name {
+				return fmt.Errorf("target[%d]: nested model must not reference itself", i)
+			}
+			if DB != nil {
+				var n int64
+				err := DB.Model(&ModelRedirect{}).Where("name = ? AND enabled = ?", modelName, true).Count(&n).Error
+				if err != nil {
+					return err
+				}
+				if n == 0 {
+					return fmt.Errorf("target[%d]: nested model %q not found or not enabled", i, modelName)
+				}
+			}
+		case t.ChannelId > 0:
+			if _, err := GetChannelById(t.ChannelId, false); err != nil {
+				return fmt.Errorf("target[%d]: channel %d not found", i, t.ChannelId)
+			}
+			if len(modelName) > modelRedirectMaxModelLen {
+				return fmt.Errorf("target[%d]: model name too long", i)
+			}
+		default:
+			return fmt.Errorf("target[%d]: invalid channel_id", i)
 		}
 		if t.Priority > modelRedirectMaxPriority {
 			return fmt.Errorf("target[%d]: priority too large (max %d)", i, modelRedirectMaxPriority)
 		}
 		if t.Weight != nil && *t.Weight < 0 {
 			return fmt.Errorf("target[%d]: weight must be >= 0", i)
-		}
-		modelName := strings.TrimSpace(t.Model)
-		if len(modelName) > modelRedirectMaxModelLen {
-			return fmt.Errorf("target[%d]: model name too long", i)
 		}
 		enabled := true
 		if t.Enabled != nil {
@@ -449,6 +630,24 @@ func validateModelRedirectInput(in *ModelRedirectInput, isCreate bool) error {
 		}
 		if count > 0 {
 			return fmt.Errorf("model name already exists")
+		}
+	}
+
+	// Cycle detection: substitute this node's nested edges with the input, then DFS.
+	if DB != nil {
+		var rows []*ModelRedirect
+		if err := DB.Preload("Targets").Find(&rows).Error; err != nil {
+			return err
+		}
+		edges := buildModelRedirectNestedEdgeMap(rows)
+		selfName = strings.TrimSpace(selfName)
+		if selfName != "" && selfName != name {
+			// Rename: drop old name so it does not leave a phantom node in the graph.
+			delete(edges, selfName)
+		}
+		edges[name] = nestedEdgesFromInput(in.Targets)
+		if detectModelRedirectCycle(name, edges) {
+			return fmt.Errorf("model redirect cycle detected")
 		}
 	}
 	return nil
@@ -538,7 +737,7 @@ func buildTargetsFromInput(inTargets []ModelRedirectTargetInput, redirectId int)
 }
 
 func CreateModelRedirect(in *ModelRedirectInput) (*ModelRedirect, error) {
-	if err := validateModelRedirectInput(in, true); err != nil {
+	if err := validateModelRedirectInput(in, true, ""); err != nil {
 		return nil, err
 	}
 	now := common.GetTimestamp()
@@ -567,11 +766,11 @@ func CreateModelRedirect(in *ModelRedirectInput) (*ModelRedirect, error) {
 }
 
 func UpdateModelRedirect(id int, in *ModelRedirectInput) (*ModelRedirect, error) {
-	if err := validateModelRedirectInput(in, false); err != nil {
-		return nil, err
-	}
 	existing, err := GetModelRedirectById(id)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateModelRedirectInput(in, false, existing.Name); err != nil {
 		return nil, err
 	}
 	name := strings.TrimSpace(in.Name)

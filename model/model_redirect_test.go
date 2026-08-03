@@ -1,8 +1,162 @@
 package model
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestResolveModelRedirect_ExpandsNestedBlackBox(t *testing.T) {
+	// Parent P: nested→child (P200), real ch=9 model=m9 (P100)
+	// Child C: real ch=1 m1 (P50), real ch=2 m2 (P40)
+	// Expected order for group default: ch1, ch2, ch9
+	modelRedirectCacheMu.Lock()
+	modelRedirectCache = map[string]*modelRedirectCacheEntry{
+		"child": {
+			Groups: map[string]struct{}{"default": {}},
+			Targets: []RedirectCandidate{
+				{ChannelID: 1, Model: "m1", Priority: 50},
+				{ChannelID: 2, Model: "m2", Priority: 40},
+			},
+		},
+		"parent": {
+			Groups: map[string]struct{}{"default": {}},
+			Targets: []RedirectCandidate{
+				{ChannelID: constant.ModelRedirectSentinelChannelID, Model: "child", Priority: 200},
+				{ChannelID: 9, Model: "m9", Priority: 100},
+			},
+		},
+	}
+	modelRedirectLoaded = true
+	modelRedirectCacheMu.Unlock()
+	t.Cleanup(func() {
+		modelRedirectCacheMu.Lock()
+		modelRedirectCache = nil
+		modelRedirectLoaded = false
+		modelRedirectCacheMu.Unlock()
+	})
+
+	cands, ok := ResolveModelRedirect("parent", "default")
+	require.True(t, ok)
+	require.Len(t, cands, 3)
+	assert.Equal(t, 1, cands[0].ChannelID)
+	assert.Equal(t, "m1", cands[0].Model)
+	assert.Equal(t, 2, cands[1].ChannelID)
+	assert.Equal(t, 9, cands[2].ChannelID)
+	for _, c := range cands {
+		require.False(t, c.IsNestedRedirect(), "resolve must not return sentinels")
+	}
+}
+
+func TestResolveModelRedirect_NestedPassthroughMaterializesChildName(t *testing.T) {
+	// child hop: real channel, empty model (passthrough)
+	// parent nests child; resolve parent must yield Model=child name not empty
+	modelRedirectCacheMu.Lock()
+	modelRedirectCache = map[string]*modelRedirectCacheEntry{
+		"child": {
+			Groups: map[string]struct{}{"default": {}},
+			Targets: []RedirectCandidate{
+				{ChannelID: 1, Model: "", Priority: 50},
+			},
+		},
+		"parent": {
+			Groups: map[string]struct{}{"default": {}},
+			Targets: []RedirectCandidate{
+				{ChannelID: constant.ModelRedirectSentinelChannelID, Model: "child", Priority: 200},
+			},
+		},
+	}
+	modelRedirectLoaded = true
+	modelRedirectCacheMu.Unlock()
+	t.Cleanup(func() {
+		modelRedirectCacheMu.Lock()
+		modelRedirectCache = nil
+		modelRedirectLoaded = false
+		modelRedirectCacheMu.Unlock()
+	})
+
+	cands, ok := ResolveModelRedirect("parent", "default")
+	require.True(t, ok)
+	require.Len(t, cands, 1)
+	assert.Equal(t, 1, cands[0].ChannelID)
+	assert.Equal(t, "child", cands[0].Model)
+
+	// leaf direct request still materializes own name (equiv to passthrough client)
+	cands2, ok2 := ResolveModelRedirect("child", "default")
+	require.True(t, ok2)
+	require.Len(t, cands2, 1)
+	assert.Equal(t, "child", cands2[0].Model)
+}
+
+func TestResolveModelRedirect_NestedChildGroupMismatchSkipsBranch(t *testing.T) {
+	modelRedirectCacheMu.Lock()
+	modelRedirectCache = map[string]*modelRedirectCacheEntry{
+		"child": {
+			Groups: map[string]struct{}{"vip": {}},
+			Targets: []RedirectCandidate{
+				{ChannelID: 1, Model: "m1", Priority: 50},
+			},
+		},
+		"parent": {
+			Groups: map[string]struct{}{"default": {}},
+			Targets: []RedirectCandidate{
+				{ChannelID: constant.ModelRedirectSentinelChannelID, Model: "child", Priority: 200},
+				{ChannelID: 9, Model: "m9", Priority: 100},
+			},
+		},
+	}
+	modelRedirectLoaded = true
+	modelRedirectCacheMu.Unlock()
+	t.Cleanup(func() {
+		modelRedirectCacheMu.Lock()
+		modelRedirectCache = nil
+		modelRedirectLoaded = false
+		modelRedirectCacheMu.Unlock()
+	})
+
+	cands, ok := ResolveModelRedirect("parent", "default")
+	require.True(t, ok)
+	require.Len(t, cands, 1)
+	assert.Equal(t, 9, cands[0].ChannelID)
+}
+
+func TestResolveModelRedirect_RuntimeCycleDoesNotPanic(t *testing.T) {
+	modelRedirectCacheMu.Lock()
+	modelRedirectCache = map[string]*modelRedirectCacheEntry{
+		"a": {
+			Groups: map[string]struct{}{"default": {}},
+			Targets: []RedirectCandidate{
+				{ChannelID: constant.ModelRedirectSentinelChannelID, Model: "b", Priority: 1},
+			},
+		},
+		"b": {
+			Groups: map[string]struct{}{"default": {}},
+			Targets: []RedirectCandidate{
+				{ChannelID: constant.ModelRedirectSentinelChannelID, Model: "a", Priority: 1},
+			},
+		},
+	}
+	modelRedirectLoaded = true
+	modelRedirectCacheMu.Unlock()
+	t.Cleanup(func() {
+		modelRedirectCacheMu.Lock()
+		modelRedirectCache = nil
+		modelRedirectLoaded = false
+		modelRedirectCacheMu.Unlock()
+	})
+
+	_, ok := ResolveModelRedirect("a", "default")
+	require.False(t, ok)
+}
+
+func TestRedirectCandidate_IsNestedRedirect(t *testing.T) {
+	require.True(t, RedirectCandidate{ChannelID: constant.ModelRedirectSentinelChannelID, Model: "x"}.IsNestedRedirect())
+	require.False(t, RedirectCandidate{ChannelID: 1, Model: "x"}.IsNestedRedirect())
+}
 
 func TestAttemptModel_Passthrough(t *testing.T) {
 	if got := AttemptModel("deepseek-flash", RedirectCandidate{Model: ""}); got != "deepseek-flash" {
@@ -98,6 +252,20 @@ func TestOrderRedirectCandidates_SamePriorityLoadBalance(t *testing.T) {
 	}
 }
 
+func TestOrderRedirectCandidates_PreservesExpandOrder(t *testing.T) {
+	// Black-box expand order: child hops first (lower original prio), then parent hop (higher prio).
+	cands := []RedirectCandidate{
+		{ChannelID: 1, Model: "m1", Priority: 50},
+		{ChannelID: 2, Model: "m2", Priority: 40},
+		{ChannelID: 9, Model: "m9", Priority: 100},
+	}
+	out := orderRedirectCandidates(cands)
+	require.Len(t, out, 3)
+	assert.Equal(t, 1, out[0].ChannelID)
+	assert.Equal(t, 2, out[1].ChannelID)
+	assert.Equal(t, 9, out[2].ChannelID)
+}
+
 func TestChannelAccessibleForRedirect(t *testing.T) {
 	ch := &Channel{Status: 1, Group: "default,vip"} // ChannelStatusEnabled
 	if !ChannelAccessibleForRedirect(ch, "default") {
@@ -121,4 +289,153 @@ func TestFilterRedirectCandidates_UsesClientModelForPassthrough(t *testing.T) {
 	if len(out) != 0 {
 		t.Fatalf("missing channel should be filtered, got %d", len(out))
 	}
+}
+
+func TestDetectModelRedirectCycle(t *testing.T) {
+	edges := map[string][]string{
+		"a": {"b"},
+		"b": {"a"},
+	}
+	require.True(t, detectModelRedirectCycle("a", edges))
+	require.False(t, detectModelRedirectCycle("a", map[string][]string{"a": {"b"}, "b": {}}))
+	// Self-loop
+	require.True(t, detectModelRedirectCycle("a", map[string][]string{"a": {"a"}}))
+	// Longer cycle a→b→c→a
+	require.True(t, detectModelRedirectCycle("a", map[string][]string{
+		"a": {"b"},
+		"b": {"c"},
+		"c": {"a"},
+	}))
+	// Diamond without cycle
+	require.False(t, detectModelRedirectCycle("a", map[string][]string{
+		"a": {"b", "c"},
+		"b": {"d"},
+		"c": {"d"},
+		"d": {},
+	}))
+}
+
+func setupModelRedirectTestDB(t *testing.T) {
+	t.Helper()
+	require.NotNil(t, DB, "package TestMain must set model.DB")
+	require.NoError(t, DB.AutoMigrate(&ModelRedirect{}, &ModelRedirectTarget{}, &Channel{}))
+	require.NoError(t, DB.Where("1 = 1").Delete(&ModelRedirectTarget{}).Error)
+	require.NoError(t, DB.Where("1 = 1").Delete(&ModelRedirect{}).Error)
+	t.Cleanup(func() {
+		_ = DB.Where("1 = 1").Delete(&ModelRedirectTarget{}).Error
+		_ = DB.Where("1 = 1").Delete(&ModelRedirect{}).Error
+	})
+}
+
+func insertEnabledChildRedirect(t *testing.T, name string) {
+	t.Helper()
+	now := common.GetTimestamp()
+	row := &ModelRedirect{
+		Name:      name,
+		Groups:    "default",
+		Enabled:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+		Targets: []ModelRedirectTarget{
+			// Dummy real hop; validation only Counts by name+enabled for nested existence.
+			{ChannelId: 1, Model: "m1", Priority: 100, Enabled: true},
+		},
+	}
+	require.NoError(t, DB.Create(row).Error)
+}
+
+func TestValidateModelRedirectInput_NestedRules(t *testing.T) {
+	setupModelRedirectTestDB(t)
+	insertEnabledChildRedirect(t, "deepseek-flash")
+
+	// Valid nested ref to enabled child.
+	err := validateModelRedirectInput(&ModelRedirectInput{
+		Name:   "parent",
+		Groups: []string{"default"},
+		Targets: []ModelRedirectTargetInput{
+			{ChannelId: constant.ModelRedirectSentinelChannelID, Model: "deepseek-flash", Priority: 10},
+		},
+	}, true, "")
+	require.NoError(t, err)
+
+	// Self-ref via nested model name.
+	err = validateModelRedirectInput(&ModelRedirectInput{
+		Name:   "parent",
+		Groups: []string{"default"},
+		Targets: []ModelRedirectTargetInput{
+			{ChannelId: constant.ModelRedirectSentinelChannelID, Model: "parent", Priority: 10},
+		},
+	}, true, "")
+	require.Error(t, err)
+
+	// Nested model required.
+	err = validateModelRedirectInput(&ModelRedirectInput{
+		Name:   "parent",
+		Groups: []string{"default"},
+		Targets: []ModelRedirectTargetInput{
+			{ChannelId: constant.ModelRedirectSentinelChannelID, Model: "", Priority: 10},
+		},
+	}, true, "")
+	require.Error(t, err)
+
+	// Missing / disabled child.
+	err = validateModelRedirectInput(&ModelRedirectInput{
+		Name:   "parent",
+		Groups: []string{"default"},
+		Targets: []ModelRedirectTargetInput{
+			{ChannelId: constant.ModelRedirectSentinelChannelID, Model: "no-such-child", Priority: 10},
+		},
+	}, true, "")
+	require.Error(t, err)
+
+	// Invalid channel_id (neither >0 nor sentinel).
+	err = validateModelRedirectInput(&ModelRedirectInput{
+		Name:   "parent",
+		Groups: []string{"default"},
+		Targets: []ModelRedirectTargetInput{
+			{ChannelId: 0, Model: "x", Priority: 10},
+		},
+	}, true, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid channel_id")
+
+	err = validateModelRedirectInput(&ModelRedirectInput{
+		Name:   "parent",
+		Groups: []string{"default"},
+		Targets: []ModelRedirectTargetInput{
+			{ChannelId: -2, Model: "x", Priority: 10},
+		},
+	}, true, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid channel_id")
+}
+
+func TestValidateModelRedirectInput_Cycle(t *testing.T) {
+	setupModelRedirectTestDB(t)
+
+	// Seed a→b so saving b→a forms a cycle.
+	now := common.GetTimestamp()
+	require.NoError(t, DB.Create(&ModelRedirect{
+		Name: "a", Groups: "default", Enabled: true, CreatedAt: now, UpdatedAt: now,
+		Targets: []ModelRedirectTarget{
+			{ChannelId: constant.ModelRedirectSentinelChannelID, Model: "b", Priority: 10, Enabled: true},
+		},
+	}).Error)
+	require.NoError(t, DB.Create(&ModelRedirect{
+		Name: "b", Groups: "default", Enabled: true, CreatedAt: now, UpdatedAt: now,
+		Targets: []ModelRedirectTarget{
+			// Placeholder real hop so row is valid; cycle check uses input edges for "b".
+			{ChannelId: 1, Model: "m1", Priority: 10, Enabled: true},
+		},
+	}).Error)
+
+	err := validateModelRedirectInput(&ModelRedirectInput{
+		Name:   "b",
+		Groups: []string{"default"},
+		Targets: []ModelRedirectTargetInput{
+			{ChannelId: constant.ModelRedirectSentinelChannelID, Model: "a", Priority: 10},
+		},
+	}, false, "b")
+	require.Error(t, err)
+	assert.Contains(t, strings.ToLower(err.Error()), "cycle")
 }

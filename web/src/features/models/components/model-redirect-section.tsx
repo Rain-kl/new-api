@@ -28,6 +28,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
@@ -85,6 +86,7 @@ import {
   createModelRedirect,
   deleteModelRedirect,
   listModelRedirects,
+  MODEL_REDIRECT_SENTINEL_CHANNEL_ID,
   type ModelRedirect,
   type ModelRedirectInput,
   type ModelRedirectTarget,
@@ -167,7 +169,10 @@ function draftsToInputTargets(
   const seen = new Set<string>()
   for (const draft of drafts) {
     const priority = clampPriority(draft.priority)
-    if (priority <= 0 || draft.channel_id <= 0) continue
+    if (priority <= 0) continue
+    const isNested = draft.channel_id === MODEL_REDIRECT_SENTINEL_CHANNEL_ID
+    if (!isNested && draft.channel_id <= 0) continue
+    if (isNested && !draft.model.trim()) continue
     const model = draft.model.trim().slice(0, 128)
     const key = `${priority}|${draft.channel_id}|${model}|${draft.enabled}`
     if (seen.has(key)) continue
@@ -188,9 +193,22 @@ function channelDisplayName(
   channels: ChannelOption[],
   channelId: number
 ): string {
-  if (channelId <= 0) return ''
+  if (
+    channelId !== MODEL_REDIRECT_SENTINEL_CHANNEL_ID &&
+    channelId <= 0
+  ) {
+    return ''
+  }
   const ch = channels.find((c) => c.id === channelId)
-  return ch?.name?.trim() || `#${channelId}`
+  if (ch?.name?.trim()) return ch.name.trim()
+  if (channelId === MODEL_REDIRECT_SENTINEL_CHANNEL_ID) return 'Custom redirect'
+  return `#${channelId}`
+}
+
+function isSelectedChannelId(channelId: number): boolean {
+  return (
+    channelId === MODEL_REDIRECT_SENTINEL_CHANNEL_ID || channelId > 0
+  )
 }
 
 function sortChannelsByName(channels: ChannelOption[]): ChannelOption[] {
@@ -386,6 +404,7 @@ function useModelRedirectColumns(opts: {
   onChanged: () => void
   channelNameById: Map<number, string>
 }): ColumnDef<ModelRedirect>[] {
+  const { t } = useTranslation()
   return useMemo(
     () => [
       {
@@ -435,9 +454,12 @@ function useModelRedirectColumns(opts: {
           return (
             <div className='flex max-w-md flex-col gap-0.5'>
               {targets.slice(0, 3).map((target) => {
-                const chName =
-                  opts.channelNameById.get(target.channel_id) ||
-                  `#${target.channel_id}`
+                const isNested =
+                  target.channel_id === MODEL_REDIRECT_SENTINEL_CHANNEL_ID
+                const chName = isNested
+                  ? t('Custom redirect')
+                  : opts.channelNameById.get(target.channel_id) ||
+                    `#${target.channel_id}`
                 return (
                   <span
                     key={`${target.id ?? 0}-${target.priority}-${target.channel_id}-${target.model}`}
@@ -448,7 +470,12 @@ function useModelRedirectColumns(opts: {
                     <span className='font-medium text-foreground/80'>
                       {chName}
                     </span>
-                    {target.model ? (
+                    {isNested ? (
+                      <span className='font-mono'>
+                        {' '}
+                        → {target.model || '?'}
+                      </span>
+                    ) : target.model ? (
                       <span className='font-mono'> → {target.model}</span>
                     ) : (
                       ' → 透传'
@@ -501,7 +528,7 @@ function useModelRedirectColumns(opts: {
         ),
       },
     ],
-    [opts.channelNameById, opts.onEdit, opts.onChanged]
+    [opts.channelNameById, opts.onEdit, opts.onChanged, t]
   )
 }
 
@@ -621,6 +648,7 @@ function ModelRedirectDrawer(props: {
   editing: ModelRedirect | null
   onSaved: () => void
 }) {
+  const { t } = useTranslation()
   const isEdit = !!props.editing
 
   const [name, setName] = useState('')
@@ -669,10 +697,28 @@ function ModelRedirectDrawer(props: {
     enabled: props.open,
   })
 
-  const channels = useMemo(
-    () => sortChannelsByName(channelsRaw),
-    [channelsRaw]
-  )
+  // Reuse table cache for nested virtual-name options.
+  const { data: allRedirects = [] } = useQuery({
+    queryKey: ['model-redirects'],
+    queryFn: listModelRedirects,
+    enabled: props.open,
+  })
+
+  const channelOptions = useMemo(() => {
+    const custom: ChannelOption = {
+      id: MODEL_REDIRECT_SENTINEL_CHANNEL_ID,
+      name: t('Custom redirect'),
+      models: '',
+    }
+    return [custom, ...sortChannelsByName(channelsRaw)]
+  }, [channelsRaw, t])
+
+  const nestedModelOptions = useMemo(() => {
+    return (allRedirects || [])
+      .filter((r) => r.enabled && r.name !== name.trim())
+      .map((r) => r.name)
+      .sort((a, b) => a.localeCompare(b))
+  }, [allRedirects, name])
 
   const groupList = useMemo(() => {
     const raw = groupsData?.data
@@ -686,11 +732,12 @@ function ModelRedirectDrawer(props: {
 
   const channelModelsById = useMemo(() => {
     const map = new Map<number, string[]>()
-    for (const ch of channels) {
+    for (const ch of channelOptions) {
+      if (ch.id === MODEL_REDIRECT_SENTINEL_CHANNEL_ID) continue
       map.set(ch.id, parseModelsList(ch.models))
     }
     return map
-  }, [channels])
+  }, [channelOptions])
 
   const updateTarget = useCallback(
     (index: number, patch: Partial<TargetDraft>) => {
@@ -723,8 +770,24 @@ function ModelRedirectDrawer(props: {
       if (targets.length > MAX_TARGETS) {
         throw new Error(`目标数量过多（最多 ${MAX_TARGETS}）`)
       }
-      if (targets.some((target) => !target.channel_id || target.channel_id <= 0)) {
-        throw new Error('每个目标都必须选择渠道')
+      if (
+        targets.some((target) => {
+          if (target.channel_id === MODEL_REDIRECT_SENTINEL_CHANNEL_ID) {
+            return !target.model.trim()
+          }
+          return !target.channel_id || target.channel_id <= 0
+        })
+      ) {
+        const missingNested = targets.some(
+          (target) =>
+            target.channel_id === MODEL_REDIRECT_SENTINEL_CHANNEL_ID &&
+            !target.model.trim()
+        )
+        throw new Error(
+          missingNested
+            ? t('Select a redirect model')
+            : '每个目标都必须选择渠道'
+        )
       }
       if (
         targets.some(
@@ -857,18 +920,30 @@ function ModelRedirectDrawer(props: {
                   index={index}
                   target={target}
                   canRemove={targets.length > 1}
-                  channels={channels}
+                  channels={channelOptions}
                   channelModels={
                     target.channel_id > 0
                       ? (channelModelsById.get(target.channel_id) ?? [])
                       : []
                   }
+                  nestedModelOptions={nestedModelOptions}
                   onChange={(patch) => updateTarget(index, patch)}
                   onChannelChange={(channelId) => {
+                    if (channelId === MODEL_REDIRECT_SENTINEL_CHANNEL_ID) {
+                      updateTarget(index, {
+                        channel_id: channelId,
+                        model: '',
+                      })
+                      return
+                    }
+                    const wasNested =
+                      target.channel_id === MODEL_REDIRECT_SENTINEL_CHANNEL_ID
                     const known = channelModelsById.get(channelId) ?? []
-                    // Keep current model only if the new channel still lists it.
+                    // Keep current model only if still on the new real channel.
                     const keepModel =
-                      target.model && known.includes(target.model)
+                      !wasNested &&
+                      target.model &&
+                      known.includes(target.model)
                         ? target.model
                         : ''
                     updateTarget(index, {
@@ -912,23 +987,36 @@ function RedirectTargetCard(props: {
   canRemove: boolean
   channels: ChannelOption[]
   channelModels: string[]
+  nestedModelOptions: string[]
   onChange: (patch: Partial<TargetDraft>) => void
   onChannelChange: (channelId: number) => void
   onRemove: () => void
 }) {
+  const { t } = useTranslation()
   const { target, index } = props
+  const isNested =
+    target.channel_id === MODEL_REDIRECT_SENTINEL_CHANNEL_ID
+  const channelSelected = isSelectedChannelId(target.channel_id)
 
-  const modelSelectValue = target.model
-    ? target.model
-    : PASSTHROUGH_MODEL_VALUE
+  const modelSelectValue = isNested
+    ? target.model || undefined
+    : target.model
+      ? target.model
+      : PASSTHROUGH_MODEL_VALUE
 
   const modelItems = useMemo(() => {
-    const list = [...props.channelModels]
+    const list = isNested
+      ? [...props.nestedModelOptions]
+      : [...props.channelModels]
     if (target.model && !list.includes(target.model)) {
       list.push(target.model)
     }
     return list.sort((a, b) => a.localeCompare(b))
-  }, [props.channelModels, target.model])
+  }, [isNested, props.channelModels, props.nestedModelOptions, target.model])
+
+  const modelSelectDisabled = isNested
+    ? modelItems.length === 0
+    : !channelSelected
 
   return (
     <div className='border-border/60 space-y-3 rounded-lg border p-3'>
@@ -976,13 +1064,13 @@ function RedirectTargetCard(props: {
           <Label>渠道 *</Label>
           <Select
             value={
-              target.channel_id > 0 ? String(target.channel_id) : undefined
+              channelSelected ? String(target.channel_id) : undefined
             }
             onValueChange={(v) => props.onChannelChange(Number(v))}
           >
             <SelectTrigger>
               <SelectValue placeholder='选择渠道'>
-                {target.channel_id > 0
+                {channelSelected
                   ? channelDisplayName(props.channels, target.channel_id)
                   : undefined}
               </SelectValue>
@@ -999,40 +1087,51 @@ function RedirectTargetCard(props: {
       </div>
 
       <div className='space-y-2'>
-        <Label>
-          模型{' '}
-          <span className='text-muted-foreground font-normal'>
-            （可选，不选则透传）
-          </span>
-        </Label>
+        {isNested ? (
+          <Label>{t('Redirect model')} *</Label>
+        ) : (
+          <Label>
+            模型{' '}
+            <span className='text-muted-foreground font-normal'>
+              （可选，不选则透传）
+            </span>
+          </Label>
+        )}
         <Select
           value={modelSelectValue}
           onValueChange={(v) =>
             props.onChange({
-              model: v === PASSTHROUGH_MODEL_VALUE ? '' : v,
+              model:
+                !isNested && v === PASSTHROUGH_MODEL_VALUE ? '' : v,
             })
           }
-          disabled={target.channel_id <= 0}
+          disabled={modelSelectDisabled}
         >
           <SelectTrigger>
             <SelectValue
               placeholder={
-                target.channel_id > 0
-                  ? '选择该渠道上的模型'
-                  : '请先选择渠道'
+                isNested
+                  ? t('Select a redirect model')
+                  : channelSelected
+                    ? '选择该渠道上的模型'
+                    : '请先选择渠道'
               }
             >
-              {target.model
-                ? target.model
-                : target.channel_id > 0
-                  ? '透传虚拟模型名'
-                  : undefined}
+              {isNested
+                ? target.model || undefined
+                : target.model
+                  ? target.model
+                  : channelSelected
+                    ? '透传虚拟模型名'
+                    : undefined}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={PASSTHROUGH_MODEL_VALUE}>
-              透传虚拟模型名
-            </SelectItem>
+            {!isNested && (
+              <SelectItem value={PASSTHROUGH_MODEL_VALUE}>
+                透传虚拟模型名
+              </SelectItem>
+            )}
             {modelItems.map((m) => (
               <SelectItem key={m} value={m}>
                 {m}
@@ -1041,7 +1140,9 @@ function RedirectTargetCard(props: {
           </SelectContent>
         </Select>
         <p className='text-muted-foreground text-xs'>
-          选项来自该渠道已配置的模型列表。同级负载请添加多行、不同渠道、相同优先级。
+          {isNested
+            ? '从其他已启用的虚拟模型中选择；嵌套重定向在解析时展开。'
+            : '选项来自该渠道已配置的模型列表。同级负载请添加多行、不同渠道、相同优先级。'}
         </p>
       </div>
 

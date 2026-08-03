@@ -18,6 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
 
+/** Sentinel channel_id for nested virtual-model redirect (not a real channel). */
+export const MODEL_REDIRECT_SENTINEL_CHANNEL_ID = -1
+
 export type ModelRedirectTarget = {
   id?: number
   redirect_id?: number
