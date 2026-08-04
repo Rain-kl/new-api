@@ -16,29 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { ColumnDef, RowSelectionState } from '@tanstack/react-table'
 import { Search } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import {
-  DataTablePagination,
-  DataTableView,
-  useDataTable,
-} from '@/components/data-table'
 import { Dialog } from '@/components/dialog'
 import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { cn } from '@/lib/utils'
 
 import type { UpstreamChannel } from '../types'
 import {
@@ -58,6 +45,7 @@ type ChannelSelectorDialogProps = {
   channelEndpoints: Record<number, string>
   onChannelEndpointsChange: (endpoints: Record<number, string>) => void
   onConfirm: (selectedIds: number[]) => void
+  isLoadingChannels?: boolean
 }
 
 // Synthesized presets from `controller/ratio_sync.go` always carry stable
@@ -68,6 +56,19 @@ function isOfficialChannel(channel: UpstreamChannel): boolean {
   )
 }
 
+function getEndpointType(endpoint: string): string {
+  const option = ENDPOINT_OPTIONS.find((opt) => opt.value === endpoint)
+  return option ? endpoint : 'custom'
+}
+
+/**
+ * Lightweight channel picker.
+ *
+ * Intentionally avoids DataTable + Base UI Select-in-Dialog:
+ * nested Select portals fight the dialog focus trap and have frozen the
+ * main thread when this dialog opens. A plain list + native <select> keeps
+ * the same UX without that interaction surface.
+ */
 export function ChannelSelectorDialog({
   open,
   onOpenChange,
@@ -77,240 +78,212 @@ export function ChannelSelectorDialog({
   channelEndpoints,
   onChannelEndpointsChange,
   onConfirm,
+  isLoadingChannels = false,
 }: ChannelSelectorDialogProps) {
   const { t } = useTranslation()
   const [search, setSearch] = useState('')
-  const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
-
-  useEffect(() => {
-    if (!selectedChannelIds.length) {
-      setRowSelection({})
-      return
-    }
-
-    const availableChannelIds = new Set(channels.map((channel) => channel.id))
-    const newSelection: RowSelectionState = {}
-
-    selectedChannelIds.forEach((id) => {
-      if (availableChannelIds.has(id)) {
-        newSelection[id.toString()] = true
-      }
-    })
-
-    setRowSelection(newSelection)
-  }, [selectedChannelIds, channels])
-
-  const updateEndpoint = useCallback(
-    (channelId: number, endpoint: string) => {
-      onChannelEndpointsChange({
-        ...channelEndpoints,
-        [channelId]: endpoint,
-      })
-    },
-    [channelEndpoints, onChannelEndpointsChange]
+  const [pageIndex, setPageIndex] = useState(0)
+  const pageSize = 20
+  // Parent only mounts this dialog while open, so initial state is enough —
+  // no need to sync selectedChannelIds on every parent re-render.
+  const [localSelectedIds, setLocalSelectedIds] = useState<number[]>(
+    () => selectedChannelIds
   )
 
-  const getEndpointType = (endpoint: string) => {
-    const option = ENDPOINT_OPTIONS.find((opt) => opt.value === endpoint)
-    return option ? endpoint : 'custom'
-  }
-
-  const columns = useMemo<ColumnDef<UpstreamChannel>[]>(
-    () => [
-      {
-        id: 'select',
-        size: 44,
-        minSize: 44,
-        header: ({ table }) => (
-          <Checkbox
-            checked={table.getIsAllPageRowsSelected()}
-            indeterminate={table.getIsSomePageRowsSelected()}
-            onCheckedChange={(value) =>
-              table.toggleAllPageRowsSelected(!!value)
-            }
-            aria-label='Select all'
-          />
-        ),
-        cell: ({ row }) => (
-          <Checkbox
-            checked={row.getIsSelected()}
-            onCheckedChange={(value) => row.toggleSelected(!!value)}
-            aria-label='Select row'
-          />
-        ),
-        enableSorting: false,
-        enableHiding: false,
-      },
-      {
-        accessorKey: 'name',
-        header: t('Name'),
-        size: 300,
-        minSize: 220,
-        cell: ({ row }) => {
-          const name = row.getValue('name') as string
-          const channel = row.original
-          const isOfficial = isOfficialChannel(channel)
-
-          return (
-            <div className='flex items-center gap-2'>
-              <span className='font-medium'>{name}</span>
-              {isOfficial && (
-                <StatusBadge
-                  label={t('Official')}
-                  variant='success'
-                  size='sm'
-                  copyable={false}
-                />
-              )}
-            </div>
-          )
-        },
-      },
-      {
-        accessorKey: 'base_url',
-        header: t('Base URL'),
-        size: 340,
-        minSize: 260,
-        cell: ({ row }) => {
-          const url = row.getValue('base_url') as string
-          return (
-            <span
-              className='text-muted-foreground block max-w-xs truncate font-mono text-xs'
-              title={url}
-            >
-              {url}
-            </span>
-          )
-        },
-      },
-      {
-        accessorKey: 'status',
-        header: t('Status'),
-        size: 140,
-        minSize: 120,
-        cell: ({ row }) => {
-          const status = row.getValue('status') as number
-          const config =
-            CHANNEL_STATUS_CONFIG[status as keyof typeof CHANNEL_STATUS_CONFIG]
-
-          if (!config) {
-            return (
-              <StatusBadge
-                label={t('Unknown')}
-                variant='neutral'
-                size='sm'
-                copyable={false}
-              />
-            )
-          }
-
-          return (
-            <StatusBadge
-              label={t(config.label)}
-              variant={config.variant}
-              size='sm'
-              copyable={false}
-            />
-          )
-        },
-      },
-      {
-        id: 'endpoint',
-        header: t('Sync Endpoint'),
-        size: 460,
-        minSize: 360,
-        cell: ({ row }) => {
-          const channel = row.original
-          const currentEndpoint =
-            channelEndpoints[channel.id] || DEFAULT_ENDPOINT
-          const endpointType = getEndpointType(currentEndpoint)
-
-          const handleTypeChange = (value: string) => {
-            if (value === 'custom') {
-              updateEndpoint(channel.id, '')
-            } else {
-              updateEndpoint(channel.id, value)
-            }
-          }
-
-          return (
-            <div className='flex min-w-0 items-center gap-2'>
-              <Select
-                items={ENDPOINT_OPTIONS.map((option) => ({
-                  value: option.value,
-                  label: option.label,
-                }))}
-                value={endpointType}
-                onValueChange={(v) => v !== null && handleTypeChange(v)}
-              >
-                <SelectTrigger className='h-8 w-32'>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent alignItemWithTrigger={false}>
-                  <SelectGroup>
-                    {ENDPOINT_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              {endpointType === 'custom' && (
-                <Input
-                  value={currentEndpoint}
-                  onChange={(e) => updateEndpoint(channel.id, e.target.value)}
-                  placeholder={t('/your/endpoint')}
-                  className='h-8 min-w-0 flex-1 font-mono text-xs'
-                />
-              )}
-            </div>
-          )
-        },
-      },
-    ],
-    [channelEndpoints, t, updateEndpoint]
+  const selectedIdSet = useMemo(
+    () => new Set(localSelectedIds),
+    [localSelectedIds]
   )
-
-  const filteredChannels = useMemo(() => {
-    if (!search.trim()) return channels
-
-    const searchLower = search.toLowerCase()
-    return channels.filter(
-      (ch) =>
-        ch.name.toLowerCase().includes(searchLower) ||
-        ch.base_url.toLowerCase().includes(searchLower)
-    )
-  }, [channels, search])
 
   const sortedChannels = useMemo(() => {
-    return [...filteredChannels].sort((a, b) => {
+    const searchLower = search.trim().toLowerCase()
+    const filtered = searchLower
+      ? channels.filter(
+          (ch) =>
+            ch.name.toLowerCase().includes(searchLower) ||
+            ch.base_url.toLowerCase().includes(searchLower)
+        )
+      : channels
+
+    return [...filtered].sort((a, b) => {
       const aIsOfficial = isOfficialChannel(a)
       const bIsOfficial = isOfficialChannel(b)
       if (aIsOfficial && !bIsOfficial) return -1
       if (!aIsOfficial && bIsOfficial) return 1
-      return 0
+      return a.name.localeCompare(b.name)
     })
-  }, [filteredChannels])
+  }, [channels, search])
 
-  const { table } = useDataTable({
-    data: sortedChannels,
-    columns,
-    rowSelection,
-    getRowId: (row) => row.id.toString(),
-    enableRowSelection: true,
-    onRowSelectionChange: setRowSelection,
-    initialPagination: { pageIndex: 0, pageSize: 10 },
-    withSortedRowModel: false,
-    withFacetedRowModel: false,
-  })
+  const pageCount = Math.max(1, Math.ceil(sortedChannels.length / pageSize))
+  const safePageIndex = Math.min(pageIndex, pageCount - 1)
+  const pagedChannels = useMemo(() => {
+    const start = safePageIndex * pageSize
+    return sortedChannels.slice(start, start + pageSize)
+  }, [sortedChannels, safePageIndex, pageSize])
+
+  const allVisibleSelected =
+    pagedChannels.length > 0 &&
+    pagedChannels.every((ch) => selectedIdSet.has(ch.id))
+  const someVisibleSelected =
+    !allVisibleSelected && pagedChannels.some((ch) => selectedIdSet.has(ch.id))
+
+  const toggleChannel = (channelId: number, checked: boolean) => {
+    setLocalSelectedIds((prev) => {
+      if (checked) {
+        if (prev.includes(channelId)) return prev
+        return [...prev, channelId]
+      }
+      return prev.filter((id) => id !== channelId)
+    })
+  }
+
+  const toggleAllVisible = (checked: boolean) => {
+    const visibleIds = pagedChannels.map((ch) => ch.id)
+    setLocalSelectedIds((prev) => {
+      if (checked) {
+        const next = new Set(prev)
+        visibleIds.forEach((id) => next.add(id))
+        return [...next]
+      }
+      const drop = new Set(visibleIds)
+      return prev.filter((id) => !drop.has(id))
+    })
+  }
+
+  const handleSearchChange = (value: string) => {
+    setSearch(value)
+    setPageIndex(0)
+  }
+
+  const updateEndpoint = (channelId: number, endpoint: string) => {
+    onChannelEndpointsChange({
+      ...channelEndpoints,
+      [channelId]: endpoint,
+    })
+  }
+
+  const handleEndpointTypeChange = (channelId: number, value: string) => {
+    if (value === 'custom') {
+      updateEndpoint(channelId, '')
+    } else {
+      updateEndpoint(channelId, value)
+    }
+  }
 
   const handleConfirm = () => {
-    const selectedRows = table.getSelectedRowModel().rows
-    const selectedIds = selectedRows.map((row) => row.original.id)
-    onSelectedChannelIdsChange(selectedIds)
+    onSelectedChannelIdsChange(localSelectedIds)
     onOpenChange(false)
-    onConfirm(selectedIds)
+    onConfirm(localSelectedIds)
+  }
+
+  const renderChannelListBody = () => {
+    if (isLoadingChannels) {
+      return (
+        <div className='text-muted-foreground flex h-40 items-center justify-center text-sm'>
+          {t('Loading...')}
+        </div>
+      )
+    }
+
+    if (sortedChannels.length === 0) {
+      return (
+        <div className='text-muted-foreground flex h-40 items-center justify-center text-sm'>
+          {t('No channels found')}
+        </div>
+      )
+    }
+
+    return (
+      <ul className='divide-y'>
+        {pagedChannels.map((channel) => {
+          const checked = selectedIdSet.has(channel.id)
+          const isOfficial = isOfficialChannel(channel)
+          const currentEndpoint =
+            channelEndpoints[channel.id] || DEFAULT_ENDPOINT
+          const endpointType = getEndpointType(currentEndpoint)
+          const statusConfig =
+            CHANNEL_STATUS_CONFIG[
+              channel.status as keyof typeof CHANNEL_STATUS_CONFIG
+            ]
+
+          return (
+            <li
+              key={channel.id}
+              className={cn(
+                'flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:gap-3',
+                checked && 'bg-primary/5'
+              )}
+            >
+              <div className='flex min-w-0 flex-1 items-start gap-2.5'>
+                <Checkbox
+                  checked={checked}
+                  onCheckedChange={(value) =>
+                    toggleChannel(channel.id, !!value)
+                  }
+                  className='mt-0.5'
+                  aria-label={channel.name}
+                />
+                <div className='min-w-0 flex-1'>
+                  <div className='flex flex-wrap items-center gap-2'>
+                    <span className='font-medium'>{channel.name}</span>
+                    {isOfficial && (
+                      <StatusBadge
+                        label={t('Official')}
+                        variant='success'
+                        size='sm'
+                        copyable={false}
+                      />
+                    )}
+                    {statusConfig ? (
+                      <StatusBadge
+                        label={t(statusConfig.label)}
+                        variant={statusConfig.variant}
+                        size='sm'
+                        copyable={false}
+                      />
+                    ) : null}
+                  </div>
+                  <p
+                    className='text-muted-foreground mt-0.5 truncate font-mono text-xs'
+                    title={channel.base_url}
+                  >
+                    {channel.base_url}
+                  </p>
+                </div>
+              </div>
+
+              <div className='flex min-w-0 items-center gap-2 ps-7 sm:w-[min(100%,28rem)] sm:ps-0'>
+                {/* Native select: no portal, no focus-trap fight with Dialog */}
+                <select
+                  className='border-input bg-background h-8 w-32 shrink-0 rounded-md border px-2 text-sm'
+                  value={endpointType}
+                  onChange={(e) =>
+                    handleEndpointTypeChange(channel.id, e.target.value)
+                  }
+                  aria-label={t('Sync Endpoint')}
+                >
+                  {ENDPOINT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                {endpointType === 'custom' && (
+                  <Input
+                    value={currentEndpoint}
+                    onChange={(e) =>
+                      updateEndpoint(channel.id, e.target.value)
+                    }
+                    placeholder={t('/your/endpoint')}
+                    className='h-8 min-w-0 flex-1 font-mono text-xs'
+                  />
+                )}
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+    )
   }
 
   return (
@@ -321,7 +294,7 @@ export function ChannelSelectorDialog({
       description={t(
         'Choose channels to sync upstream ratio configurations from'
       )}
-      contentClassName='flex max-h-[90vh] max-w-[calc(100%-2rem)] flex-col sm:max-w-[90vw] xl:max-w-[1400px]'
+      contentClassName='flex max-h-[90vh] max-w-[calc(100%-2rem)] flex-col sm:max-w-[90vw] xl:max-w-[1100px]'
       contentHeight='min(72vh, 720px)'
       bodyClassName='flex h-full min-h-0 flex-col overflow-hidden'
       footer={
@@ -329,44 +302,75 @@ export function ChannelSelectorDialog({
           <Button variant='outline' onClick={() => onOpenChange(false)}>
             {t('Cancel')}
           </Button>
-          <Button onClick={handleConfirm}>{t('Confirm Selection')}</Button>
+          <Button onClick={handleConfirm} disabled={isLoadingChannels}>
+            {t('Confirm Selection')}
+          </Button>
         </>
       }
     >
-      <div className='flex h-full min-h-0 flex-col gap-4 overflow-hidden'>
-        <div className='flex shrink-0 items-center gap-2'>
-          <div className='relative flex-1'>
+      <div className='flex h-full min-h-0 flex-col gap-3 overflow-hidden'>
+        <div className='flex shrink-0 items-center gap-3'>
+          <div className='relative min-w-0 flex-1'>
             <Search className='text-muted-foreground pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2' />
             <Input
               placeholder={t('Search by name or URL...')}
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => handleSearchChange(e.target.value)}
               className='ps-9'
             />
           </div>
+          <label className='text-muted-foreground flex shrink-0 items-center gap-2 text-sm'>
+            <Checkbox
+              checked={allVisibleSelected}
+              indeterminate={someVisibleSelected}
+              onCheckedChange={(value) => toggleAllVisible(!!value)}
+              disabled={pagedChannels.length === 0}
+              aria-label={t('Select all')}
+            />
+            {t('Select all')}
+          </label>
         </div>
 
-        <DataTableView
-          table={table}
-          containerClassName='min-h-0 flex-1 rounded-md'
-          tableContainerClassName='h-full min-h-0'
-          tableHeaderClassName='[background-color:var(--table-header)]'
-          splitHeaderScrollClassName='h-full'
-          bodyContainerClassName='[scrollbar-gutter:stable]'
-          splitHeader
-          getColumnClassName={(columnId, part) => {
-            if (columnId === 'select') return 'w-11 text-center align-middle'
-            if (columnId === 'status') {
-              return part === 'header' ? 'h-11 align-middle' : 'align-middle'
-            }
-            return part === 'header' ? 'h-11 align-middle' : 'align-middle'
-          }}
-          emptyContent={t('No channels found')}
-          emptyCellClassName='h-24 text-center'
-        />
+        <div className='min-h-0 flex-1 overflow-auto rounded-md border'>
+          {renderChannelListBody()}
+        </div>
 
-        <div className='shrink-0'>
-          <DataTablePagination table={table} />
+        <div className='text-muted-foreground flex shrink-0 items-center justify-between gap-2 text-xs'>
+          <span>
+            {t('Total:')} {sortedChannels.length}
+            {localSelectedIds.length > 0
+              ? ` · ${localSelectedIds.length} ${t('selected')}`
+              : null}
+          </span>
+          {pageCount > 1 ? (
+            <div className='flex items-center gap-2'>
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                className='h-7 px-2'
+                disabled={safePageIndex <= 0}
+                onClick={() => setPageIndex(Math.max(0, safePageIndex - 1))}
+              >
+                {t('Previous')}
+              </Button>
+              <span className='tabular-nums'>
+                {safePageIndex + 1} / {pageCount}
+              </span>
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                className='h-7 px-2'
+                disabled={safePageIndex >= pageCount - 1}
+                onClick={() =>
+                  setPageIndex(Math.min(pageCount - 1, safePageIndex + 1))
+                }
+              >
+                {t('Next')}
+              </Button>
+            </div>
+          ) : null}
         </div>
       </div>
     </Dialog>

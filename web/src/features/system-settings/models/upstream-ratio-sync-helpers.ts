@@ -304,25 +304,49 @@ export function getEffectiveResolutionSelections(
   differences: Record<string, Partial<Record<RatioType, RatioDifferenceEntry>>>,
   selections: ResolutionSelection[]
 ): ResolvedResolutionSelection[] {
+  // Keep last-write-wins per model+ratioType. Selecting price clears ratio
+  // fields for the same model (and vice versa); tiered fields never clear
+  // either side. Index non-tiered keys by model+category so this stays O(n)
+  // instead of scanning the whole map per selection (which freezes the UI
+  // once upstream diffs grow to thousands of models).
   const effectiveByKey = new Map<string, ResolvedResolutionSelection>()
+  const nonTieredKeysByModel = new Map<
+    string,
+    Map<'price' | 'ratio', Set<string>>
+  >()
 
   selections.forEach((selection) => {
     const resolved = resolveResolutionSelection(differences, selection)
     const category = getBillingCategory(resolved.ratioType)
+    const key = `${resolved.model}\u0000${resolved.ratioType}`
 
-    if (category !== 'tiered') {
-      for (const [key, existing] of effectiveByKey) {
-        if (
-          existing.model === resolved.model &&
-          getBillingCategory(existing.ratioType) !== 'tiered' &&
-          getBillingCategory(existing.ratioType) !== category
-        ) {
-          effectiveByKey.delete(key)
+    if (category === 'price' || category === 'ratio') {
+      const byCategory = nonTieredKeysByModel.get(resolved.model)
+      if (byCategory) {
+        const opposingCategory = category === 'price' ? 'ratio' : 'price'
+        const opposingKeys = byCategory.get(opposingCategory)
+        if (opposingKeys) {
+          opposingKeys.forEach((opposingKey) => {
+            effectiveByKey.delete(opposingKey)
+          })
+          opposingKeys.clear()
         }
       }
+
+      let modelCategories = nonTieredKeysByModel.get(resolved.model)
+      if (!modelCategories) {
+        modelCategories = new Map()
+        nonTieredKeysByModel.set(resolved.model, modelCategories)
+      }
+      let categoryKeys = modelCategories.get(category)
+      if (!categoryKeys) {
+        categoryKeys = new Set()
+        modelCategories.set(category, categoryKeys)
+      }
+      categoryKeys.add(key)
     }
 
-    effectiveByKey.set(`${resolved.model}\u0000${resolved.ratioType}`, resolved)
+    effectiveByKey.set(key, resolved)
   })
 
   return [...effectiveByKey.values()]

@@ -18,7 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckSquare, RefreshCcw } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -134,10 +140,15 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
   const [conflictItems, setConflictItems] = useState<ConflictItem[]>([])
   const [confirmLoading, setConfirmLoading] = useState(false)
 
-  const { data: channelsData } = useQuery({
+  const {
+    data: channelsData,
+    isFetching: isFetchingChannels,
+    isLoading: isLoadingChannels,
+  } = useQuery({
     queryKey: ['upstream-channels'],
     queryFn: getUpstreamChannels,
     enabled: channelDialogOpen,
+    staleTime: 60_000,
   })
 
   // Memoize the channels list so the effect below only re-runs when the query
@@ -178,8 +189,12 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
         toast.warning(t('Some channels failed: {{errorMsg}}', { errorMsg }))
       }
 
-      setDifferences(diffs)
-      setResolutions({})
+      // Large upstream presets can produce thousands of model diffs — apply as
+      // a transition so the confirm click stays responsive while the table builds.
+      startTransition(() => {
+        setDifferences(diffs)
+        setResolutions({})
+      })
 
       if (Object.keys(diffs).length === 0) {
         toast.success(t('No price differences found'))
@@ -509,16 +524,21 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
         />
       </div>
 
-      <ChannelSelectorDialog
-        open={channelDialogOpen}
-        onOpenChange={setChannelDialogOpen}
-        channels={channels}
-        selectedChannelIds={selectedChannelIds}
-        onSelectedChannelIdsChange={setSelectedChannelIds}
-        channelEndpoints={channelEndpoints}
-        onChannelEndpointsChange={setChannelEndpoints}
-        onConfirm={handleConfirmChannelSelection}
-      />
+      {/* Mount only while open: avoids keeping DataTable/Select machinery alive
+          and re-running under a closed Dialog focus context. */}
+      {channelDialogOpen ? (
+        <ChannelSelectorDialog
+          open
+          onOpenChange={setChannelDialogOpen}
+          channels={channels}
+          selectedChannelIds={selectedChannelIds}
+          onSelectedChannelIdsChange={setSelectedChannelIds}
+          channelEndpoints={channelEndpoints}
+          onChannelEndpointsChange={setChannelEndpoints}
+          onConfirm={handleConfirmChannelSelection}
+          isLoadingChannels={isLoadingChannels || isFetchingChannels}
+        />
+      ) : null}
 
       <ConflictConfirmDialog
         open={conflictDialogOpen}
