@@ -88,6 +88,9 @@ export interface ChannelSettings {
   system_prompt_override?: boolean
   http_protocol?: 'auto' | 'http1' | string
   http2_connection_shards?: number
+  messages_role_compatibility_enabled?: boolean
+  messages_role_allowed_list?: string[]
+  messages_role_fallback?: string
 }
 
 export interface ChannelOtherSettings {

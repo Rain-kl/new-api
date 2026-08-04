@@ -5251,6 +5251,17 @@
     "Zero retention": "零數據保留",
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "Messages Role Compatibility": "Messages 角色相容性",
+    "Remap unsupported message roles (e.g. developer) to a fallback role before sending upstream": "將上游不支援的訊息角色（如 developer）在送出前對應為回退角色，避免角色驗證錯誤",
+    "Allowed Roles": "允許的角色清單",
+    "Select or add allowed roles": "選擇或新增允許的角色",
+    "Add role \"{{value}}\"": "新增角色 \"{{value}}\"",
+    "Message roles accepted by the upstream. Unsupported roles are remapped to the fallback role.": "上游接受的訊息角色。不在清單中的角色會被對應為回退角色。",
+    "Fallback Role": "回退角色",
+    "Role used when a message role is not in the allowed list. Default: system.": "當訊息角色不在允許清單中時使用的回退角色。預設：system。",
+    "Allowed roles are required when messages role compatibility is enabled": "啟用 Messages 角色相容性時必須設定允許的角色清單",
+    "Fallback role is required when messages role compatibility is enabled": "啟用 Messages 角色相容性時必須設定回退角色",
+    "Fallback role must be included in the allowed roles list": "回退角色必須包含在允許的角色清單中"
   }
 }

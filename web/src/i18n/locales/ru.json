@@ -5251,6 +5251,17 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Messages Role Compatibility": "Совместимость ролей Messages",
+    "Remap unsupported message roles (e.g. developer) to a fallback role before sending upstream": "Перед отправкой на upstream преобразует неподдерживаемые роли сообщений (например, developer) в резервную роль",
+    "Allowed Roles": "Разрешённые роли",
+    "Select or add allowed roles": "Выберите или добавьте разрешённые роли",
+    "Add role \"{{value}}\"": "Добавить роль «{{value}}»",
+    "Message roles accepted by the upstream. Unsupported roles are remapped to the fallback role.": "Роли сообщений, которые принимает upstream. Неподдерживаемые роли преобразуются в резервную роль.",
+    "Fallback Role": "Резервная роль",
+    "Role used when a message role is not in the allowed list. Default: system.": "Роль, используемая если роль сообщения отсутствует в списке разрешённых. По умолчанию: system.",
+    "Allowed roles are required when messages role compatibility is enabled": "При включённой совместимости ролей Messages требуется список разрешённых ролей",
+    "Fallback role is required when messages role compatibility is enabled": "При включённой совместимости ролей Messages требуется резервная роль",
+    "Fallback role must be included in the allowed roles list": "Резервная роль должна входить в список разрешённых ролей"
   }
 }

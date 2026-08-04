@@ -5251,6 +5251,17 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Messages Role Compatibility": "Tương thích vai trò Messages",
+    "Remap unsupported message roles (e.g. developer) to a fallback role before sending upstream": "Ánh xạ các vai trò tin nhắn không được hỗ trợ (ví dụ developer) sang vai trò dự phòng trước khi gửi upstream",
+    "Allowed Roles": "Danh sách vai trò được phép",
+    "Select or add allowed roles": "Chọn hoặc thêm vai trò được phép",
+    "Add role \"{{value}}\"": "Thêm vai trò \"{{value}}\"",
+    "Message roles accepted by the upstream. Unsupported roles are remapped to the fallback role.": "Các vai trò tin nhắn mà upstream chấp nhận. Vai trò không được hỗ trợ sẽ được ánh xạ sang vai trò dự phòng.",
+    "Fallback Role": "Vai trò dự phòng",
+    "Role used when a message role is not in the allowed list. Default: system.": "Vai trò dùng khi vai trò tin nhắn không nằm trong danh sách được phép. Mặc định: system.",
+    "Allowed roles are required when messages role compatibility is enabled": "Cần cấu hình danh sách vai trò được phép khi bật tương thích vai trò Messages",
+    "Fallback role is required when messages role compatibility is enabled": "Cần cấu hình vai trò dự phòng khi bật tương thích vai trò Messages",
+    "Fallback role must be included in the allowed roles list": "Vai trò dự phòng phải nằm trong danh sách vai trò được phép"
   }
 }

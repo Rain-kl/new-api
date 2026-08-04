@@ -5251,6 +5251,17 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Messages Role Compatibility": "Compatibilité des rôles Messages",
+    "Remap unsupported message roles (e.g. developer) to a fallback role before sending upstream": "Remappe les rôles de message non pris en charge (ex. developer) vers un rôle de repli avant l'envoi en amont",
+    "Allowed Roles": "Rôles autorisés",
+    "Select or add allowed roles": "Sélectionner ou ajouter des rôles autorisés",
+    "Add role \"{{value}}\"": "Ajouter le rôle « {{value}} »",
+    "Message roles accepted by the upstream. Unsupported roles are remapped to the fallback role.": "Rôles de message acceptés par l'amont. Les rôles non pris en charge sont remappés vers le rôle de repli.",
+    "Fallback Role": "Rôle de repli",
+    "Role used when a message role is not in the allowed list. Default: system.": "Rôle utilisé lorsqu'un rôle de message n'est pas dans la liste autorisée. Par défaut : system.",
+    "Allowed roles are required when messages role compatibility is enabled": "Les rôles autorisés sont requis lorsque la compatibilité des rôles Messages est activée",
+    "Fallback role is required when messages role compatibility is enabled": "Le rôle de repli est requis lorsque la compatibilité des rôles Messages est activée",
+    "Fallback role must be included in the allowed roles list": "Le rôle de repli doit figurer dans la liste des rôles autorisés"
   }
 }

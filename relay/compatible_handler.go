@@ -106,6 +106,9 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		}
 		requestBody = common.ReaderOnly(storage)
 	} else {
+		// Remap before conversion for adaptors that transform away from OpenAI format.
+		info.ChannelSetting.ApplyMessagesRoleCompatibility(request.Messages)
+
 		convertedRequest, err := adaptor.ConvertOpenAIRequest(c, info, request)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
@@ -152,6 +155,12 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 					}
 				}
 			}
+		}
+
+		// Remap unsupported roles (e.g. developer) after adaptor conversion so
+		// o-series system->developer rewriting is also covered.
+		if openaiReq, ok := convertedRequest.(*dto.GeneralOpenAIRequest); ok {
+			info.ChannelSetting.ApplyMessagesRoleCompatibility(openaiReq.Messages)
 		}
 
 		jsonData, err := common.Marshal(convertedRequest)
