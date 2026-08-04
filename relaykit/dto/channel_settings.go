@@ -23,13 +23,28 @@ type ChannelSettings struct {
 	// HTTP2ConnectionShards spreads HTTP/2 traffic across N independent transports
 	// (1-8). Zero/unset means 1. Ignored when HTTPProtocol is "http1".
 	HTTP2ConnectionShards int `json:"http2_connection_shards,omitempty"`
+	// MessagesRoleCompatibilityEnabled remaps unsupported message roles before
+	// the request is sent upstream (e.g. "developer" -> fallback role).
+	MessagesRoleCompatibilityEnabled bool `json:"messages_role_compatibility_enabled,omitempty"`
+	// MessagesRoleAllowedList is the set of roles accepted by the upstream.
+	// Empty means DefaultMessagesRoleAllowedList when compatibility is enabled.
+	MessagesRoleAllowedList []string `json:"messages_role_allowed_list,omitempty"`
+	// MessagesRoleFallback is used when a message role is not in the allowed list.
+	// Empty means DefaultMessagesRoleFallback when compatibility is enabled.
+	MessagesRoleFallback string `json:"messages_role_fallback,omitempty"`
 }
 
 const (
 	HTTPProtocolAuto         = "auto"
 	HTTPProtocolHTTP1        = "http1"
 	MaxHTTP2ConnectionShards = 8
+
+	DefaultMessagesRoleFallback = "system"
 )
+
+// DefaultMessagesRoleAllowedList matches common OpenAI-compatible role enums that
+// reject newer roles such as "developer".
+var DefaultMessagesRoleAllowedList = []string{"system", "assistant", "user", "tool", "function"}
 
 // ValidateHTTPTransport validates save-time HTTP transport channel settings.
 func (s *ChannelSettings) ValidateHTTPTransport() error {
@@ -49,6 +64,77 @@ func (s *ChannelSettings) ValidateHTTPTransport() error {
 		return fmt.Errorf("http2_connection_shards must be 1 when http_protocol is http1")
 	}
 	return nil
+}
+
+// ValidateMessagesRoleCompatibility validates role compatibility settings.
+func (s *ChannelSettings) ValidateMessagesRoleCompatibility() error {
+	if s == nil || !s.MessagesRoleCompatibilityEnabled {
+		return nil
+	}
+	allowed := normalizeMessagesRoleList(s.MessagesRoleAllowedList)
+	if len(allowed) == 0 {
+		return fmt.Errorf("messages_role_allowed_list must not be empty when messages role compatibility is enabled")
+	}
+	fallback := strings.TrimSpace(s.MessagesRoleFallback)
+	if fallback == "" {
+		return fmt.Errorf("messages_role_fallback must not be empty when messages role compatibility is enabled")
+	}
+	for _, role := range allowed {
+		if role == fallback {
+			return nil
+		}
+	}
+	return fmt.Errorf("messages_role_fallback %q must be included in messages_role_allowed_list", fallback)
+}
+
+// ApplyMessagesRoleCompatibility remaps message roles that are not in the
+// configured allowed list to the fallback role. No-op when disabled.
+func (s *ChannelSettings) ApplyMessagesRoleCompatibility(messages []Message) {
+	if s == nil || !s.MessagesRoleCompatibilityEnabled || len(messages) == 0 {
+		return
+	}
+	allowed := normalizeMessagesRoleList(s.MessagesRoleAllowedList)
+	if len(allowed) == 0 {
+		allowed = append([]string(nil), DefaultMessagesRoleAllowedList...)
+	}
+	fallback := strings.TrimSpace(s.MessagesRoleFallback)
+	if fallback == "" {
+		fallback = DefaultMessagesRoleFallback
+	}
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, role := range allowed {
+		allowedSet[role] = struct{}{}
+	}
+	for i := range messages {
+		role := strings.TrimSpace(messages[i].Role)
+		if role == "" {
+			continue
+		}
+		if _, ok := allowedSet[role]; ok {
+			continue
+		}
+		messages[i].Role = fallback
+	}
+}
+
+func normalizeMessagesRoleList(roles []string) []string {
+	if len(roles) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(roles))
+	normalized := make([]string, 0, len(roles))
+	for _, role := range roles {
+		role = strings.TrimSpace(role)
+		if role == "" {
+			continue
+		}
+		if _, exists := seen[role]; exists {
+			continue
+		}
+		seen[role] = struct{}{}
+		normalized = append(normalized, role)
+	}
+	return normalized
 }
 
 type VertexKeyType string

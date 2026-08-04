@@ -578,3 +578,67 @@ func TestChannelSettingsValidateHTTPTransport(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "http2_connection_shards")
 }
+
+func TestChannelSettingsValidateMessagesRoleCompatibility(t *testing.T) {
+	require.NoError(t, (&ChannelSettings{}).ValidateMessagesRoleCompatibility())
+	require.NoError(t, (&ChannelSettings{
+		MessagesRoleCompatibilityEnabled: true,
+		MessagesRoleAllowedList:          []string{"system", "user", "assistant"},
+		MessagesRoleFallback:             "system",
+	}).ValidateMessagesRoleCompatibility())
+
+	err := (&ChannelSettings{
+		MessagesRoleCompatibilityEnabled: true,
+		MessagesRoleAllowedList:          nil,
+		MessagesRoleFallback:             "system",
+	}).ValidateMessagesRoleCompatibility()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "messages_role_allowed_list")
+
+	err = (&ChannelSettings{
+		MessagesRoleCompatibilityEnabled: true,
+		MessagesRoleAllowedList:          []string{"system", "user"},
+		MessagesRoleFallback:             "",
+	}).ValidateMessagesRoleCompatibility()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "messages_role_fallback")
+
+	err = (&ChannelSettings{
+		MessagesRoleCompatibilityEnabled: true,
+		MessagesRoleAllowedList:          []string{"system", "user"},
+		MessagesRoleFallback:             "assistant",
+	}).ValidateMessagesRoleCompatibility()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "messages_role_fallback")
+}
+
+func TestApplyMessagesRoleCompatibility(t *testing.T) {
+	messages := []Message{
+		{Role: "developer", Content: "rules"},
+		{Role: "user", Content: "hi"},
+		{Role: "tool", Content: "result"},
+		{Role: "function", Content: "legacy"},
+	}
+
+	disabled := &ChannelSettings{}
+	disabled.ApplyMessagesRoleCompatibility(messages)
+	assert.Equal(t, "developer", messages[0].Role)
+
+	enabled := &ChannelSettings{
+		MessagesRoleCompatibilityEnabled: true,
+		MessagesRoleAllowedList:          []string{"system", "assistant", "user", "tool", "function"},
+		MessagesRoleFallback:             "system",
+	}
+	enabled.ApplyMessagesRoleCompatibility(messages)
+	assert.Equal(t, "system", messages[0].Role)
+	assert.Equal(t, "user", messages[1].Role)
+	assert.Equal(t, "tool", messages[2].Role)
+	assert.Equal(t, "function", messages[3].Role)
+
+	// Empty list/fallback use defaults at apply time.
+	defaulted := []Message{{Role: "developer", Content: "x"}}
+	(&ChannelSettings{MessagesRoleCompatibilityEnabled: true}).ApplyMessagesRoleCompatibility(defaulted)
+	assert.Equal(t, "system", defaulted[0].Role)
+	assert.Equal(t, []string{"system", "assistant", "user", "tool", "function"}, DefaultMessagesRoleAllowedList)
+	assert.Equal(t, "system", DefaultMessagesRoleFallback)
+}

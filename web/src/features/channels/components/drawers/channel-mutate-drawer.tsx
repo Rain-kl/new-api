@@ -152,6 +152,8 @@ import {
   CHANNEL_TYPE_ADVANCED_CUSTOM,
   channelFormSchema,
   channelsQueryKeys,
+  DEFAULT_MESSAGES_ROLE_ALLOWED_LIST,
+  DEFAULT_MESSAGES_ROLE_FALLBACK,
   getAdvancedCustomStats,
   transformChannelToFormDefaults,
   type ChannelFormValues,
@@ -289,6 +291,9 @@ const SENSITIVE_FORM_FIELDS = [
   'pass_through_body_enabled',
   'system_prompt',
   'system_prompt_override',
+  'messages_role_compatibility_enabled',
+  'messages_role_allowed_list',
+  'messages_role_fallback',
   'allow_service_tier',
   'disable_store',
   'allow_safety_identifier',
@@ -341,6 +346,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.thinking_to_content ||
     values.pass_through_body_enabled ||
     values.system_prompt_override ||
+    values.messages_role_compatibility_enabled ||
     (values.http_protocol && values.http_protocol !== 'auto') ||
     (values.http2_connection_shards != null &&
       values.http2_connection_shards > 1) ||
@@ -754,6 +760,12 @@ export function ChannelMutateDrawer({
   const currentHttp2ConnectionShards = form.watch('http2_connection_shards')
   const currentSystemPrompt = form.watch('system_prompt')
   const currentSystemPromptOverride = form.watch('system_prompt_override')
+  const currentMessagesRoleCompatibilityEnabled = form.watch(
+    'messages_role_compatibility_enabled'
+  )
+  const currentMessagesRoleAllowedList = form.watch(
+    'messages_role_allowed_list'
+  )
   const currentAllowServiceTier = form.watch('allow_service_tier')
   const currentDisableStore = form.watch('disable_store')
   const currentAllowSafetyIdentifier = form.watch('allow_safety_identifier')
@@ -1022,6 +1034,7 @@ export function ChannelMutateDrawer({
     currentProxy?.trim() ||
     currentSystemPrompt?.trim() ||
     currentSystemPromptOverride ||
+    currentMessagesRoleCompatibilityEnabled ||
     (currentHttpProtocol && currentHttpProtocol !== 'auto') ||
     (currentHttp2ConnectionShards != null && currentHttp2ConnectionShards > 1)
   )
@@ -4366,6 +4379,177 @@ export function ChannelMutateDrawer({
                                 </FormItem>
                               )}
                             />
+
+                            <FormField
+                              control={form.control}
+                              name='messages_role_compatibility_enabled'
+                              render={({ field }) => (
+                                <FormItem className='flex items-center justify-between'>
+                                  <div className='space-y-0.5'>
+                                    <FormLabel>
+                                      {t('Messages Role Compatibility')}
+                                    </FormLabel>
+                                    <FormDescription>
+                                      {t(
+                                        'Remap unsupported message roles (e.g. developer) to a fallback role before sending upstream'
+                                      )}
+                                    </FormDescription>
+                                  </div>
+                                  <FormControl>
+                                    <Switch
+                                      checked={field.value}
+                                      onCheckedChange={(checked) => {
+                                        field.onChange(checked)
+                                        if (checked) {
+                                          const allowed =
+                                            form.getValues(
+                                              'messages_role_allowed_list'
+                                            ) || []
+                                          if (allowed.length === 0) {
+                                            form.setValue(
+                                              'messages_role_allowed_list',
+                                              [
+                                                ...DEFAULT_MESSAGES_ROLE_ALLOWED_LIST,
+                                              ],
+                                              {
+                                                shouldDirty: true,
+                                                shouldValidate: true,
+                                              }
+                                            )
+                                          }
+                                          if (
+                                            !form
+                                              .getValues(
+                                                'messages_role_fallback'
+                                              )
+                                              ?.trim()
+                                          ) {
+                                            form.setValue(
+                                              'messages_role_fallback',
+                                              DEFAULT_MESSAGES_ROLE_FALLBACK,
+                                              {
+                                                shouldDirty: true,
+                                                shouldValidate: true,
+                                              }
+                                            )
+                                          }
+                                        }
+                                      }}
+                                    />
+                                  </FormControl>
+                                </FormItem>
+                              )}
+                            />
+
+                            {currentMessagesRoleCompatibilityEnabled && (
+                              <div className='space-y-4 rounded-md border p-4'>
+                                <FormField
+                                  control={form.control}
+                                  name='messages_role_allowed_list'
+                                  render={({ field }) => {
+                                    const selected = field.value || []
+                                    const roleOptions = Array.from(
+                                      new Set([
+                                        ...DEFAULT_MESSAGES_ROLE_ALLOWED_LIST,
+                                        ...selected,
+                                      ])
+                                    ).map((role) => ({
+                                      label: role,
+                                      value: role,
+                                    }))
+                                    return (
+                                      <FormItem>
+                                        <FormLabel>
+                                          {t('Allowed Roles')}
+                                        </FormLabel>
+                                        <FormControl>
+                                          <MultiSelect
+                                            options={roleOptions}
+                                            selected={selected}
+                                            onChange={field.onChange}
+                                            allowCreate
+                                            placeholder={t(
+                                              'Select or add allowed roles'
+                                            )}
+                                            createLabel={t(
+                                              'Add role "{{value}}"'
+                                            )}
+                                          />
+                                        </FormControl>
+                                        <FormDescription>
+                                          {t(
+                                            'Message roles accepted by the upstream. Unsupported roles are remapped to the fallback role.'
+                                          )}
+                                        </FormDescription>
+                                        <FormMessage />
+                                      </FormItem>
+                                    )
+                                  }}
+                                />
+
+                                <FormField
+                                  control={form.control}
+                                  name='messages_role_fallback'
+                                  render={({ field }) => {
+                                    const allowed =
+                                      currentMessagesRoleAllowedList || []
+                                    const fallbackOptions = Array.from(
+                                      new Set([
+                                        ...allowed,
+                                        field.value?.trim() ||
+                                          DEFAULT_MESSAGES_ROLE_FALLBACK,
+                                      ])
+                                    )
+                                      .filter(Boolean)
+                                      .map((role) => ({
+                                        value: role,
+                                        label: role,
+                                      }))
+                                    return (
+                                      <FormItem>
+                                        <FormLabel>
+                                          {t('Fallback Role')}
+                                        </FormLabel>
+                                        <Select
+                                          items={fallbackOptions}
+                                          value={
+                                            field.value ||
+                                            DEFAULT_MESSAGES_ROLE_FALLBACK
+                                          }
+                                          onValueChange={field.onChange}
+                                        >
+                                          <FormControl>
+                                            <SelectTrigger>
+                                              <SelectValue />
+                                            </SelectTrigger>
+                                          </FormControl>
+                                          <SelectContent
+                                            alignItemWithTrigger={false}
+                                          >
+                                            <SelectGroup>
+                                              {fallbackOptions.map((item) => (
+                                                <SelectItem
+                                                  key={item.value}
+                                                  value={item.value}
+                                                >
+                                                  {item.label}
+                                                </SelectItem>
+                                              ))}
+                                            </SelectGroup>
+                                          </SelectContent>
+                                        </Select>
+                                        <FormDescription>
+                                          {t(
+                                            'Role used when a message role is not in the allowed list. Default: system.'
+                                          )}
+                                        </FormDescription>
+                                        <FormMessage />
+                                      </FormItem>
+                                    )
+                                  }}
+                                />
+                              </div>
+                            )}
                           </fieldset>
                         </div>
 

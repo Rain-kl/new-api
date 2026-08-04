@@ -45,6 +45,17 @@ const SUPPORTED_PROXY_PROTOCOLS = new Set([
   'socks5h:',
 ])
 
+/** Default allowed roles for messages role compatibility (OpenAI-compatible). */
+export const DEFAULT_MESSAGES_ROLE_ALLOWED_LIST = [
+  'system',
+  'assistant',
+  'user',
+  'tool',
+  'function',
+] as const
+
+export const DEFAULT_MESSAGES_ROLE_FALLBACK = 'system'
+
 function isOptionalProxyURL(value: string | undefined): boolean {
   const trimmedValue = value?.trim() || ''
   if (!trimmedValue) return true
@@ -261,6 +272,9 @@ export const channelFormSchema = z
     pass_through_body_enabled: z.boolean().optional(),
     system_prompt: z.string().optional(),
     system_prompt_override: z.boolean().optional(),
+    messages_role_compatibility_enabled: z.boolean().optional(),
+    messages_role_allowed_list: z.array(z.string()).optional(),
+    messages_role_fallback: z.string().optional(),
     // Type-specific settings (stored in settings JSON)
     is_enterprise_account: z.boolean().optional(), // OpenRouter specific
     vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
@@ -329,6 +343,33 @@ export const channelFormSchema = z
         'other',
         'This channel type requires additional configuration'
       )
+    }
+
+    if (data.messages_role_compatibility_enabled) {
+      const allowed = (data.messages_role_allowed_list || [])
+        .map((role) => role.trim())
+        .filter(Boolean)
+      if (allowed.length === 0) {
+        addRequiredIssue(
+          ctx,
+          'messages_role_allowed_list',
+          'Allowed roles are required when messages role compatibility is enabled'
+        )
+      }
+      const fallback = data.messages_role_fallback?.trim() || ''
+      if (!fallback) {
+        addRequiredIssue(
+          ctx,
+          'messages_role_fallback',
+          'Fallback role is required when messages role compatibility is enabled'
+        )
+      } else if (allowed.length > 0 && !allowed.includes(fallback)) {
+        addRequiredIssue(
+          ctx,
+          'messages_role_fallback',
+          'Fallback role must be included in the allowed roles list'
+        )
+      }
     }
 
     if (data.type === 57) {
@@ -433,6 +474,9 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   pass_through_body_enabled: false,
   system_prompt: '',
   system_prompt_override: false,
+  messages_role_compatibility_enabled: false,
+  messages_role_allowed_list: [...DEFAULT_MESSAGES_ROLE_ALLOWED_LIST],
+  messages_role_fallback: DEFAULT_MESSAGES_ROLE_FALLBACK,
   // Type-specific settings
   is_enterprise_account: false,
   vertex_key_type: 'json',
@@ -473,6 +517,9 @@ export function transformChannelToFormDefaults(
     pass_through_body_enabled: false,
     system_prompt: '',
     system_prompt_override: false,
+    messages_role_compatibility_enabled: false,
+    messages_role_allowed_list: [...DEFAULT_MESSAGES_ROLE_ALLOWED_LIST],
+    messages_role_fallback: DEFAULT_MESSAGES_ROLE_FALLBACK,
   }
 
   if (channel.setting) {
@@ -482,6 +529,11 @@ export function transformChannelToFormDefaults(
       const shards = normalizeHttp2ConnectionShards(
         parsed.http2_connection_shards
       )
+      const allowedList = Array.isArray(parsed.messages_role_allowed_list)
+        ? parsed.messages_role_allowed_list
+            .map((role: unknown) => String(role).trim())
+            .filter(Boolean)
+        : []
       extraSettings = {
         force_format: parsed.force_format || false,
         thinking_to_content: parsed.thinking_to_content || false,
@@ -492,6 +544,17 @@ export function transformChannelToFormDefaults(
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
+        messages_role_compatibility_enabled:
+          parsed.messages_role_compatibility_enabled === true,
+        messages_role_allowed_list:
+          allowedList.length > 0
+            ? allowedList
+            : [...DEFAULT_MESSAGES_ROLE_ALLOWED_LIST],
+        messages_role_fallback:
+          typeof parsed.messages_role_fallback === 'string' &&
+          parsed.messages_role_fallback.trim()
+            ? parsed.messages_role_fallback.trim()
+            : DEFAULT_MESSAGES_ROLE_FALLBACK,
       }
     } catch (error) {
       // eslint-disable-next-line no-console
@@ -622,6 +685,19 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
     settingObj.http_protocol = HTTP_PROTOCOL_HTTP1
   } else if (shards > 1) {
     settingObj.http2_connection_shards = shards
+  }
+
+  if (formData.messages_role_compatibility_enabled) {
+    const allowedList = (formData.messages_role_allowed_list || [])
+      .map((role) => role.trim())
+      .filter(Boolean)
+    settingObj.messages_role_compatibility_enabled = true
+    settingObj.messages_role_allowed_list =
+      allowedList.length > 0
+        ? allowedList
+        : [...DEFAULT_MESSAGES_ROLE_ALLOWED_LIST]
+    settingObj.messages_role_fallback =
+      formData.messages_role_fallback?.trim() || DEFAULT_MESSAGES_ROLE_FALLBACK
   }
 
   return JSON.stringify(settingObj)

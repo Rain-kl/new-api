@@ -5248,6 +5248,17 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Messages Role Compatibility": "Messages ロール互換性",
+    "Remap unsupported message roles (e.g. developer) to a fallback role before sending upstream": "上流が未対応のメッセージロール（例: developer）を送信前にフォールバックロールへ変換します",
+    "Allowed Roles": "許可ロール一覧",
+    "Select or add allowed roles": "許可ロールを選択または追加",
+    "Add role \"{{value}}\"": "ロール「{{value}}」を追加",
+    "Message roles accepted by the upstream. Unsupported roles are remapped to the fallback role.": "上流が受け入れるメッセージロールです。未対応のロールはフォールバックロールへ変換されます。",
+    "Fallback Role": "フォールバックロール",
+    "Role used when a message role is not in the allowed list. Default: system.": "メッセージロールが許可一覧にない場合に使用するロール。デフォルト: system。",
+    "Allowed roles are required when messages role compatibility is enabled": "Messages ロール互換性を有効にする場合は許可ロール一覧が必要です",
+    "Fallback role is required when messages role compatibility is enabled": "Messages ロール互換性を有効にする場合はフォールバックロールが必要です",
+    "Fallback role must be included in the allowed roles list": "フォールバックロールは許可ロール一覧に含まれている必要があります"
   }
 }
