@@ -50,6 +50,7 @@ const ADVANCED_SETTINGS_FIELDS = new Set<FieldPath<ChannelFormValues>>([
   'codex_client_version',
   'codex_client_name',
   'codex_identity_mode',
+  'chat_completions_to_responses',
   'allow_service_tier',
   'disable_store',
   'allow_safety_identifier',

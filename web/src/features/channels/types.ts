@@ -95,6 +95,7 @@ export interface ChannelSettings {
   codex_client_version?: string
   codex_client_name?: string
   codex_identity_mode?: 'auto' | 'passthrough' | 'synthesize' | string
+  chat_completions_to_responses?: boolean
 }
 
 export interface ChannelOtherSettings {

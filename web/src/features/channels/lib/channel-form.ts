@@ -297,6 +297,8 @@ export const channelFormSchema = z
         CODEX_IDENTITY_MODE_SYNTHESIZE,
       ])
       .optional(),
+    // Sub2API: convert Chat Completions → Responses before upstream
+    chat_completions_to_responses: z.boolean().optional(),
     // Type-specific settings (stored in settings JSON)
     is_enterprise_account: z.boolean().optional(), // OpenRouter specific
     vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
@@ -530,6 +532,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   codex_client_version: DEFAULT_CODEX_CLIENT_VERSION,
   codex_client_name: '',
   codex_identity_mode: CODEX_IDENTITY_MODE_AUTO,
+  chat_completions_to_responses: false,
   // Type-specific settings
   is_enterprise_account: false,
   vertex_key_type: 'json',
@@ -580,6 +583,7 @@ export function transformChannelToFormDefaults(
       | 'passthrough'
       | 'synthesize',
     codex_client_name: '',
+    chat_completions_to_responses: false,
   }
 
   if (channel.setting) {
@@ -635,6 +639,8 @@ export function transformChannelToFormDefaults(
             ? parsed.codex_client_name
             : '',
         codex_identity_mode: identityMode,
+        chat_completions_to_responses:
+          parsed.chat_completions_to_responses === true,
       }
     } catch (error) {
       // eslint-disable-next-line no-console
@@ -794,6 +800,9 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
         formData.codex_identity_mode || CODEX_IDENTITY_MODE_AUTO
     } else {
       settingObj.codex_compat_enabled = false
+    }
+    if (formData.chat_completions_to_responses === true) {
+      settingObj.chat_completions_to_responses = true
     }
   }
 

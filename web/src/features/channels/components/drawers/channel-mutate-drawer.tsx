@@ -303,6 +303,7 @@ const SENSITIVE_FORM_FIELDS = [
   'codex_client_version',
   'codex_client_name',
   'codex_identity_mode',
+  'chat_completions_to_responses',
   'allow_service_tier',
   'disable_store',
   'allow_safety_identifier',
@@ -357,6 +358,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.system_prompt_override ||
     values.messages_role_compatibility_enabled ||
     values.codex_compat_enabled ||
+    values.chat_completions_to_responses ||
     (values.http_protocol && values.http_protocol !== 'auto') ||
     (values.http2_connection_shards != null &&
       values.http2_connection_shards > 1) ||
@@ -763,6 +765,9 @@ export function ChannelMutateDrawer({
   const currentThinkingToContent = form.watch('thinking_to_content')
   const currentPassThroughBodyEnabled = form.watch('pass_through_body_enabled')
   const currentCodexCompatEnabled = form.watch('codex_compat_enabled')
+  const currentChatCompletionsToResponses = form.watch(
+    'chat_completions_to_responses'
+  )
   const currentDisableTaskPollingSleep = form.watch(
     'disable_task_polling_sleep'
   )
@@ -1042,6 +1047,7 @@ export function ChannelMutateDrawer({
     currentThinkingToContent ||
     currentPassThroughBodyEnabled ||
     currentCodexCompatEnabled ||
+    currentChatCompletionsToResponses ||
     currentDisableTaskPollingSleep ||
     currentProxy?.trim() ||
     currentSystemPrompt?.trim() ||
@@ -4371,6 +4377,33 @@ export function ChannelMutateDrawer({
                                       />
                                     </div>
                                   )}
+
+                                  <FormField
+                                    control={form.control}
+                                    name='chat_completions_to_responses'
+                                    render={({ field }) => (
+                                      <FormItem className='flex items-center justify-between px-4 py-3'>
+                                        <div className='space-y-0.5'>
+                                          <FormLabel>
+                                            {t(
+                                              'Chat Completions → Responses'
+                                            )}
+                                          </FormLabel>
+                                          <FormDescription>
+                                            {t(
+                                              'When enabled, convert Chat Completions (CC) requests to the OpenAI Responses API before sending them to Sub2API upstream. Native Responses and other protocols are left unchanged.'
+                                            )}
+                                          </FormDescription>
+                                        </div>
+                                        <FormControl>
+                                          <Switch
+                                            checked={field.value === true}
+                                            onCheckedChange={field.onChange}
+                                          />
+                                        </FormControl>
+                                      </FormItem>
+                                    )}
+                                  />
                                 </>
                               )}
 
