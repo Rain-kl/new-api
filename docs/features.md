@@ -1,4 +1,4 @@
-# 个性化需求
+# Features 二开特性
 
 本文档记录在 new-api 上游代码基础上做的个性化功能修改。所有修改遵循**最小侵入 / 低冲突补丁**原则：
 
@@ -225,7 +225,9 @@
 | 文件 | 操作 |
 |------|------|
 | `.github/workflows/feat-docker-image.yml` | feat 分支 Docker 构建（若存在） |
-| `docs/个性化需求.md` | 本文档 |
+| `.github/workflows/canary-docker-image.yml` | Canary 分支多架构镜像发布 |
+| `makefile` | `make canary`：feat → Canary 合并推送后回原分支 |
+| `docs/features.md` | 本文档 |
 
 ---
 
@@ -280,3 +282,166 @@
 | `controller/model.go` | `allowModelInUserList` 一行 |
 | `controller/relay.go` | 降级重试；成功清冷却 / 失败记冷却 |
 | `web/src/features/models/*` | UI 页签与表单（含「自定义重定向」） |
+
+---
+
+## 四、消息 Role 兼容（2026-08-04）
+
+### 需求背景
+
+部分上游 OpenAI 兼容接口的 role 枚举较旧，不接受 `developer` 等新角色，会返回 `invalid_request_error`。需要在渠道侧可配置地把不支持角色映射为允许列表中的 fallback。
+
+### 行为
+
+- 渠道 `setting` JSON 字段：
+  - `messages_role_compatibility_enabled`（默认 `false`）
+  - `messages_role_allowed_list`（开启时必填；默认 `system/assistant/user/tool/function`）
+  - `messages_role_fallback`（开启时必填且须在 allowed list 内；默认 `system`）
+- 开启后，在发往上游前对 messages 做角色重写；关闭则零行为变化。
+- 保存时校验：`ValidateMessagesRoleCompatibility`（`model/channel.go` → `ValidateSettings`）。
+
+### 挂钩点
+
+| 位置 | 说明 |
+|------|------|
+| `relay/compatible_handler.go` | Chat Completions 转换前 `ApplyMessagesRoleCompatibility` |
+| `relay/chat_completions_via_responses.go` | CC→Responses 路径同样应用 |
+| `relaykit/dto/channel_settings.go` | 字段 + 校验 + Apply |
+
+### 前端
+
+渠道编辑抽屉「高级设置」：开关 + 允许列表 + fallback；i18n 全语言键。
+
+### 关键文件
+
+| 文件 | 操作 |
+|------|------|
+| `relaykit/dto/channel_settings.go` | 字段 / Validate / Apply |
+| `relaykit/dto/channel_settings_test.go` | 校验与 remap 测试 |
+| `model/channel.go` | ValidateSettings 挂校验 |
+| `relay/compatible_handler.go` / `chat_completions_via_responses.go` | 调用 Apply |
+| `web/src/features/channels/*` | 表单 / 抽屉 / 类型 |
+| `web/src/i18n/locales/*` | 文案 |
+
+---
+
+## 五、Sub2API Codex 兼容层（2026-08-05）
+
+### 需求背景
+
+流量经 new-api **Sub2API（type=59）** 打到 sub2api 时，若上游账号开启 `codex_cli_only`，请求必须像官方 Codex 客户端（UA / originator / `x-codex-*`、稳定 session 等）。  
+**决策：不新增渠道类型**，在既有 Sub2API 上增加可选兼容层。设计与实现计划见：
+
+- `docs/superpowers/specs/2026-08-05-codex-gateway-channel-design.md`
+- `docs/superpowers/plans/2026-08-05-sub2api-codex-compat.md`
+
+### 行为（`codex_compat_enabled=true` 时）
+
+| 能力 | 说明 |
+|------|------|
+| 身份模式 | `auto` / `passthrough` / `synthesize`（空=auto） |
+| Auto | 官方 CLI 身份可过 gate 时透传；否则合成 sticky ID |
+| 合成字段 | `User-Agent`（含版本）、`originator`、`session_id` / `thread_id` / `x-codex-window-id` |
+| Sticky | 与 body `prompt_cache_key` 对齐；禁止纯随机每请求 ID |
+| Compact | `RelayModeResponsesCompact` 时 `Accept: application/json` |
+| 关闭时 | 与嵌入的 `newapi.Adaptor` 行为一致 |
+
+渠道 `setting`：`codex_compat_enabled`、`codex_client_version`（auto/synthesize 必填，`X.Y.Z…`）、`codex_client_name`（默认 `codex_cli_rs`）、`codex_identity_mode`。  
+校验：`ValidateCodexCompat`。
+
+### 实现结构
+
+| 包/文件 | 职责 |
+|---------|------|
+| `relay/channel/codexcompat/*` | **新** 纯逻辑：gate 检测、sticky ID、header apply、body `prompt_cache_key` |
+| `relay/channel/sub2api/adaptor.go` | 覆盖 `SetupRequestHeader` / `ConvertOpenAIResponsesRequest` |
+| `relaykit/dto/channel_settings.go` | 字段 + 校验 |
+| 渠道编辑 UI（type=59） | Codex compatibility 开关与子表单项 |
+
+Auth 仍为 `Authorization: Bearer <channel.key>`；路径仍以 `/v1/responses` 等 OpenAI 兼容风格为主。ChatGPT Subscription Codex（57）不变。
+
+---
+
+## 六、Sub2API：Chat Completions → Responses（2026-08-05）
+
+### 需求背景
+
+部分 Sub2API / 上游网关更偏好 `/v1/responses`。全局策略 `global.chat_completions_to_responses_policy` 依赖渠道白名单 + **模型正则**，运营不便。需要**渠道级开关**：只要客户端是 Chat Completions（CC），就转换为 Responses 再打上游。
+
+### 行为
+
+- 渠道 `setting`：`chat_completions_to_responses`（默认 `false`，omitempty）
+- 决策顺序（`service.ShouldChatCompletionsUseResponses`）：
+  1. 注册 skip 的渠道类型（如 Echo）永不转换  
+  2. **渠道强制** `chat_completions_to_responses=true` → 全模型转换  
+  3. 否则走全局 policy（allowlist + model patterns）
+- 挂接点：`relay/compatible_handler.go`（CC）、`relay/claude_handler.go`（Claude→CC→Responses 既有路径）
+- 实际转换复用 `chatCompletionsViaResponses`（临时 `RelayModeResponses` + `RequestURLPath=/v1/responses`）
+- Body 透传开启时不转换（与全局一致）
+- UI：仅 Sub2API 渠道展示 **Chat Completions → Responses** 开关
+
+### 关键文件
+
+| 文件 | 操作 |
+|------|------|
+| `relaykit/dto/channel_settings.go` | `ChatCompletionsToResponses` |
+| `service/openai_chat_responses_mode.go` | `ShouldChatCompletionsUseResponses` |
+| `service/openai_chat_responses_mode_test.go` | **新** 决策测试 |
+| `relay/compatible_handler.go` / `claude_handler.go` | 传入渠道强制标志 |
+| `web/src/features/channels/*` | 表单 / 抽屉 / 类型 |
+| `web/src/i18n/locales/*` | 文案 |
+
+---
+
+## 七、DeepSeek：剥离无签名 thinking 块（2026-08-05）
+
+### 问题
+
+多轮请求把 assistant 的 `thinking` 内容回传时，若缺少上游当初返回的 `signature`，DeepSeek 的 Anthropic 兼容接口 `/anthropic/v1/messages` 会 400。
+
+### 修复
+
+`relay/channel/deepseek/adaptor.go`：`ConvertClaudeRequest` 在后缀 thinking 处理后调用 `stripUnsignedThinkingBlocks`：
+
+- 去掉 `type=thinking` 且 `signature` 为空的 content 块  
+- 带有效 signature 的块原样保留  
+
+---
+
+## 八、上游倍率同步：Select Sync Channels 对话框卡死（2026-08-04）
+
+### 问题
+
+系统设置 → 模型倍率上游同步里，「选择同步渠道」对话框打开时可能主线程卡死（Base UI Select 嵌套 Dialog 焦点陷阱 + DataTable 重渲染）。
+
+### 修复
+
+| 点 | 说明 |
+|----|------|
+| UI | 重写渠道选择：分页普通列表 + native `<select>`，对话框仅 open 时挂载 |
+| 数据 | O(n) bulk 解析；大体积 official/models.dev diff 延迟渲染 |
+| 文件 | `channel-selector-dialog.tsx`、`upstream-ratio-sync*.tsx`、helpers + 单测 |
+
+---
+
+## 九、Canary 发布流水线（2026-08-03）
+
+| 项 | 说明 |
+|----|------|
+| Workflow | `.github/workflows/canary-docker-image.yml`：推送 **Canary** 构建 `wryms/new-api:Canary`（amd64+arm64），固定 version `Canary`，并触发 deploy webhook |
+| Make | `make canary`：将当前 `feat` 合并进 `Canary` 并 push，完成后切回原分支 |
+
+---
+
+## 近期增量索引（2026-08-03 ~ 2026-08-05）
+
+| 日期 | 主题 | 章节 |
+|------|------|------|
+| 08-03 | Canary Docker + `make canary` | §九 |
+| 08-04 | 消息 role 兼容 | §四 |
+| 08-04 | 上游倍率同步渠道选择器卡死 | §八 |
+| 08-05 | DeepSeek 无签名 thinking 剥离 | §七 |
+| 08-05 | Sub2API Codex 兼容层 | §五 |
+| 08-05 | Sub2API CC→Responses 渠道开关 | §六 |
+
+> 更细的 Codex 设计/任务拆分以 `docs/superpowers/` 下 2026-08-05 文档为准；本文只记落地行为与文件面。
