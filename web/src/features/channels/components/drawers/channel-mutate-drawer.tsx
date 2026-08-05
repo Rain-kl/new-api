@@ -189,6 +189,7 @@ import {
 import { ParamOverrideEditorDialog } from '../dialogs/param-override-editor-dialog'
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
 import { ModelMappingEditor } from '../model-mapping-editor'
+import { ChannelProxyFields } from './channel-proxy-fields'
 import {
   ChannelAdvancedSection,
   ChannelApiAccessSection,
@@ -291,6 +292,7 @@ const SENSITIVE_FORM_FIELDS = [
   'force_format',
   'thinking_to_content',
   'proxy',
+  'proxy_id',
   'http_protocol',
   'http2_connection_shards',
   'pass_through_body_enabled',
@@ -351,6 +353,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.priority ||
     values.weight ||
     values.proxy?.trim() ||
+    (values.proxy_id != null && values.proxy_id > 0) ||
     values.system_prompt?.trim() ||
     values.force_format ||
     values.thinking_to_content ||
@@ -772,6 +775,7 @@ export function ChannelMutateDrawer({
     'disable_task_polling_sleep'
   )
   const currentProxy = form.watch('proxy')
+  const currentProxyId = form.watch('proxy_id')
   const currentHttpProtocol = form.watch('http_protocol')
   const currentHttp2ConnectionShards = form.watch('http2_connection_shards')
   const currentSystemPrompt = form.watch('system_prompt')
@@ -1050,6 +1054,7 @@ export function ChannelMutateDrawer({
     currentChatCompletionsToResponses ||
     currentDisableTaskPollingSleep ||
     currentProxy?.trim() ||
+    (currentProxyId != null && currentProxyId > 0) ||
     currentSystemPrompt?.trim() ||
     currentSystemPromptOverride ||
     currentMessagesRoleCompatibilityEnabled ||
@@ -4433,29 +4438,8 @@ export function ChannelMutateDrawer({
                               />
                             </div>
 
-                            <FormField
-                              control={form.control}
-                              name='proxy'
-                              render={({ field }) => (
-                                <FormItem>
-                                  <FormLabel>{t('Proxy Address')}</FormLabel>
-                                  <FormControl>
-                                    <Input
-                                      placeholder={t(
-                                        'socks5://user:pass@host:port'
-                                      )}
-                                      {...field}
-                                    />
-                                  </FormControl>
-                                  <FormDescription>
-                                    {t(
-                                      'Network proxy for this channel (supports HTTP, HTTPS, SOCKS5, and SOCKS5H)'
-                                    )}
-                                  </FormDescription>
-                                  <FormMessage />
-                                </FormItem>
-                              )}
-                            />
+                            <ChannelProxyFields form={form} />
+
 
                             <FormField
                               control={form.control}

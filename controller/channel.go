@@ -476,6 +476,13 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		return fmt.Errorf("channel cannot be empty")
 	}
 
+	// Normalize managed proxy_id → resolved proxy URL before settings validation.
+	setting := channel.GetSetting()
+	if err := normalizeChannelProxySettings(&setting); err != nil {
+		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())
+	}
+	channel.SetSetting(setting)
+
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
 		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())
@@ -1369,6 +1376,101 @@ func BatchSetChannelTag(c *gin.Context) {
 		"data":    len(channelBatch.Ids),
 	})
 	return
+}
+
+// ChannelProxyBatch is the body for POST /api/channel/batch/proxy.
+type ChannelProxyBatch struct {
+	Ids     []int `json:"ids"`
+	ProxyId int   `json:"proxy_id"`
+}
+
+// normalizeChannelProxySettings resolves managed proxy_id to URL or validates custom URL.
+func normalizeChannelProxySettings(s *dto.ChannelSettings) error {
+	if s == nil {
+		return nil
+	}
+	if s.ProxyId > 0 {
+		p, err := model.GetProxyById(s.ProxyId)
+		if err != nil {
+			return fmt.Errorf("proxy not found")
+		}
+		if p.Status != model.ProxyStatusActive {
+			return fmt.Errorf("proxy is not active")
+		}
+		if p.IsExpired(common.GetTimestamp()) {
+			return fmt.Errorf("proxy is not active")
+		}
+		s.Proxy = p.URL()
+		return nil
+	}
+	s.ProxyId = 0
+	if _, err := common.ParseProxyURLStrict(s.Proxy); err != nil {
+		return fmt.Errorf("invalid channel proxy: %w", err)
+	}
+	return nil
+}
+
+// BatchSetChannelProxy binds or clears a managed proxy on multiple channels.
+func BatchSetChannelProxy(c *gin.Context) {
+	var req ChannelProxyBatch
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.Ids) == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "参数错误",
+		})
+		return
+	}
+
+	proxyURL := ""
+	if req.ProxyId > 0 {
+		p, err := model.GetProxyById(req.ProxyId)
+		if err != nil {
+			common.ApiErrorMsg(c, "proxy not found")
+			return
+		}
+		if p.Status != model.ProxyStatusActive || p.IsExpired(common.GetTimestamp()) {
+			common.ApiErrorMsg(c, "proxy is not active")
+			return
+		}
+		proxyURL = p.URL()
+	}
+
+	// Collect previous URLs for cache invalidation.
+	oldURLs := make(map[string]struct{})
+	var channels []model.Channel
+	if err := model.DB.Where("id IN ?", req.Ids).Find(&channels).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	for i := range channels {
+		old := channels[i].GetSetting().Proxy
+		if old != "" {
+			oldURLs[old] = struct{}{}
+		}
+	}
+
+	n, err := model.SetChannelsProxy(req.Ids, req.ProxyId, proxyURL)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	for u := range oldURLs {
+		service.InvalidateProxyClient(u)
+	}
+	if proxyURL != "" {
+		service.InvalidateProxyClient(proxyURL)
+	}
+	if common.MemoryCacheEnabled {
+		model.InitChannelCache()
+	}
+	recordManageAudit(c, "channel.proxy_batch_set", map[string]interface{}{
+		"count":    n,
+		"proxy_id": req.ProxyId,
+	})
+	common.ApiSuccess(c, gin.H{
+		"updated":  n,
+		"proxy_id": req.ProxyId,
+	})
 }
 
 func GetTagModels(c *gin.Context) {

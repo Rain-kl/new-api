@@ -31,6 +31,7 @@ import {
   batchUpdateChannelStatus,
   batchDeleteChannels,
   batchSetChannelTag,
+  batchSetChannelProxy,
   enableTagChannels,
   disableTagChannels,
   deleteDisabledChannels,
@@ -538,6 +539,34 @@ export async function handleBatchSetTag(
     }
   } catch {
     toast.error(i18next.t('Failed to set tag'))
+  }
+}
+
+/**
+ * Batch set managed proxy (proxy_id=0 clears)
+ */
+export async function handleBatchSetProxy(
+  ids: number[],
+  proxyId: number,
+  queryClient?: QueryClient,
+  onSuccess?: () => void
+): Promise<void> {
+  if (ids.length === 0) {
+    toast.error(i18next.t('No channels selected'))
+    return
+  }
+
+  try {
+    const response = await batchSetChannelProxy(ids, proxyId)
+    if (response.success) {
+      toast.success(i18next.t(SUCCESS_MESSAGES.PROXY_SET))
+      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      onSuccess?.()
+    } else {
+      toast.error(response.message || i18next.t('Failed to set proxy'))
+    }
+  } catch {
+    toast.error(i18next.t('Failed to set proxy'))
   }
 }
 

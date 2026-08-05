@@ -271,6 +271,7 @@ export const SUCCESS_MESSAGES = {
   MODELS_FETCHED: 'Models fetched successfully',
   COPIED: 'Channel copied successfully',
   TAG_SET: 'Tag set successfully',
+  PROXY_SET: 'Proxy set successfully',
   BATCH_DELETED: 'Channels deleted successfully',
 } as const
 

@@ -134,6 +134,10 @@ export function SidebarModulesSection({
         title: t('Channels'),
         description: t('Configure upstream providers and routing.'),
       },
+      proxies: {
+        title: t('IP Management'),
+        description: t('Manage outbound proxy pool for channels.'),
+      },
       models: {
         title: t('Models'),
         description: t('Manage catalog visibility and pricing.'),

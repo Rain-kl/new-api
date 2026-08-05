@@ -203,6 +203,21 @@ export async function batchSetChannelTag(
   return res.data
 }
 
+/**
+ * Batch set managed proxy for channels. proxy_id=0 clears pool bind + proxy URL.
+ */
+export async function batchSetChannelProxy(
+  ids: number[],
+  proxy_id: number
+): Promise<{ success: boolean; message?: string; data?: number }> {
+  const res = await api.post(
+    '/api/channel/batch/proxy',
+    { ids, proxy_id },
+    channelActionConfig()
+  )
+  return res.data
+}
+
 // ============================================================================
 // Channel Operations
 // ============================================================================

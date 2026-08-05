@@ -16,15 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { type Table } from '@tanstack/react-table'
-import { Power, PowerOff, Tag, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { Network, Power, PowerOff, Tag, Trash2 } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { DataTableBulkActions as BulkActionsToolbar } from '@/components/data-table'
 import { Dialog } from '@/components/dialog'
 import { Button } from '@/components/ui/button'
+import { Combobox } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -32,6 +33,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { getAllProxies } from '@/features/proxies/api'
+import type { Proxy } from '@/features/proxies/types'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
@@ -44,6 +47,7 @@ import {
   handleBatchDelete,
   handleBatchDisable,
   handleBatchEnable,
+  handleBatchSetProxy,
   handleBatchSetTag,
 } from '../lib'
 import type { Channel } from '../types'
@@ -58,9 +62,28 @@ export function DataTableBulkActions<TData>({
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [showTagDialog, setShowTagDialog] = useState(false)
+  const [showProxyDialog, setShowProxyDialog] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [tagValue, setTagValue] = useState('')
+  const [proxyIdValue, setProxyIdValue] = useState('0')
   const currentUser = useAuthStore((s) => s.auth.user)
+
+  const { data: proxyList = [] } = useQuery({
+    queryKey: ['proxies', 'all', 'channel-bulk'],
+    queryFn: async () => {
+      const result = await getAllProxies(false)
+      return result.success ? result.data || [] : []
+    },
+    enabled: showProxyDialog,
+  })
+
+  const proxyOptions = useMemo(() => {
+    const managed = (proxyList as Proxy[]).map((p) => ({
+      value: String(p.id),
+      label: `${p.name} (${p.protocol}://${p.host}:${p.port})`,
+    }))
+    return [{ value: '0', label: t('No proxy') }, ...managed]
+  }, [proxyList, t])
   const canEditSensitive = hasPermission(
     currentUser,
     ADMIN_PERMISSION_RESOURCES.CHANNEL,
@@ -104,6 +127,19 @@ export function DataTableBulkActions<TData>({
       setTagValue('')
       handleClearSelection()
     })
+  }
+
+  const handleSetProxy = () => {
+    handleBatchSetProxy(
+      selectedIds,
+      Number(proxyIdValue) || 0,
+      queryClient,
+      () => {
+        setShowProxyDialog(false)
+        setProxyIdValue('0')
+        handleClearSelection()
+      }
+    )
   }
 
   return (
@@ -171,6 +207,29 @@ export function DataTableBulkActions<TData>({
           </TooltipTrigger>
           <TooltipContent>
             <p>{t('Set tag for selected channels')}</p>
+          </TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant='outline'
+                size='icon'
+                onClick={() => setShowProxyDialog(true)}
+                className='size-8'
+                aria-label={t('Set proxy for selected channels')}
+                title={t('Set Proxy')}
+              />
+            }
+          >
+            <Network />
+            <span className='sr-only'>
+              {t('Set proxy for selected channels')}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>{t('Set Proxy')}</p>
           </TooltipContent>
         </Tooltip>
 
@@ -248,6 +307,48 @@ export function DataTableBulkActions<TData>({
               placeholder={t('Enter tag name (optional)')}
               value={tagValue}
               onChange={(e) => setTagValue(e.target.value)}
+            />
+          </div>
+        </div>
+      </Dialog>
+
+      {/* Set Proxy Dialog */}
+      <Dialog
+        open={showProxyDialog}
+        onOpenChange={setShowProxyDialog}
+        title={t('Set Proxy')}
+        description={
+          <>
+            {t('Set a managed proxy for')} {selectedIds.length}{' '}
+            {t('selected channel(s). Choose No proxy to clear.')}
+          </>
+        }
+        contentHeight='auto'
+        bodyClassName='space-y-4'
+        footer={
+          <>
+            <Button
+              variant='outline'
+              onClick={() => {
+                setShowProxyDialog(false)
+                setProxyIdValue('0')
+              }}
+            >
+              {t('Cancel')}
+            </Button>
+            <Button onClick={handleSetProxy}>{t('Set Proxy')}</Button>
+          </>
+        }
+      >
+        <div className='grid gap-4 py-4'>
+          <div className='grid gap-2'>
+            <Label>{t('Managed Proxy')}</Label>
+            <Combobox
+              options={proxyOptions}
+              value={proxyIdValue}
+              onValueChange={(v) => setProxyIdValue(v || '0')}
+              placeholder={t('Select managed proxy')}
+              emptyText={t('No proxies found')}
             />
           </div>
         </div>

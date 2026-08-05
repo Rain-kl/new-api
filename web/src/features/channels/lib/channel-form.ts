@@ -278,6 +278,7 @@ export const channelFormSchema = z
       .string()
       .optional()
       .refine(isOptionalProxyURL, ERROR_MESSAGES.INVALID_PROXY),
+    proxy_id: z.number().int().optional(),
     http_protocol: z.enum(['auto', 'http1']).optional(),
     http2_connection_shards: z.number().int().optional(),
     pass_through_body_enabled: z.boolean().optional(),
@@ -520,6 +521,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   force_format: false,
   thinking_to_content: false,
   proxy: '',
+  proxy_id: 0,
   http_protocol: HTTP_PROTOCOL_AUTO,
   http2_connection_shards: 1,
   pass_through_body_enabled: false,
@@ -568,6 +570,7 @@ export function transformChannelToFormDefaults(
     force_format: false,
     thinking_to_content: false,
     proxy: '',
+    proxy_id: 0,
     http_protocol: HTTP_PROTOCOL_AUTO as 'auto' | 'http1',
     http2_connection_shards: 1,
     pass_through_body_enabled: false,
@@ -607,10 +610,15 @@ export function transformChannelToFormDefaults(
         identityModeRaw === CODEX_IDENTITY_MODE_SYNTHESIZE
           ? identityModeRaw
           : CODEX_IDENTITY_MODE_AUTO
+      const parsedProxyId =
+        typeof parsed.proxy_id === 'number'
+          ? parsed.proxy_id
+          : Number(parsed.proxy_id) || 0
       extraSettings = {
         force_format: parsed.force_format || false,
         thinking_to_content: parsed.thinking_to_content || false,
         proxy: parsed.proxy || '',
+        proxy_id: parsedProxyId > 0 ? parsedProxyId : 0,
         http_protocol: protocol,
         http2_connection_shards:
           protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
@@ -751,10 +759,15 @@ export function transformChannelToFormDefaults(
  * Build the setting JSON string from form extra settings
  */
 export function buildSettingJSON(formData: ChannelFormValues): string {
+  const proxyId =
+    typeof formData.proxy_id === 'number' && formData.proxy_id > 0
+      ? formData.proxy_id
+      : 0
   const settingObj: Record<string, unknown> = {
     force_format: formData.force_format || false,
     thinking_to_content: formData.thinking_to_content || false,
-    proxy: formData.proxy?.trim() || '',
+    proxy: proxyId > 0 ? formData.proxy?.trim() || '' : formData.proxy?.trim() || '',
+    proxy_id: proxyId,
     pass_through_body_enabled: formData.pass_through_body_enabled || false,
     system_prompt: formData.system_prompt || '',
     system_prompt_override: formData.system_prompt_override || false,
