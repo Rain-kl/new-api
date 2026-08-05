@@ -40,7 +40,42 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 	if err := applyDeepSeekV4ClaudeThinkingSuffix(info, claudeRequest); err != nil {
 		return nil, err
 	}
+	stripUnsignedThinkingBlocks(claudeRequest.Messages)
 	return claudeRequest, nil
+}
+
+// stripUnsignedThinkingBlocks removes assistant thinking blocks that lack a matching
+// signature before a Claude-format request reaches the upstream. Anthropic-style
+// extended thinking (also used by DeepSeek's /anthropic/v1/messages endpoint) requires
+// thinking content sent back in multi-turn conversations to carry the signature that was
+// originally returned; clients that drop the signature would otherwise trigger a 400
+// ("content[].thinking ... must be passed back to the API").
+func stripUnsignedThinkingBlocks(messages []dto.ClaudeMessage) {
+	for i := range messages {
+		msg := &messages[i]
+		switch blocks := msg.Content.(type) {
+		case []interface{}:
+			kept := make([]interface{}, 0, len(blocks))
+			for _, b := range blocks {
+				if m, ok := b.(map[string]interface{}); ok && m["type"] == "thinking" {
+					if sig, _ := m["signature"].(string); sig == "" {
+						continue
+					}
+				}
+				kept = append(kept, b)
+			}
+			msg.Content = kept
+		case []dto.ClaudeMediaMessage:
+			kept := make([]dto.ClaudeMediaMessage, 0, len(blocks))
+			for _, b := range blocks {
+				if b.Type == "thinking" && b.Signature == "" {
+					continue
+				}
+				kept = append(kept, b)
+			}
+			msg.Content = kept
+		}
+	}
 }
 
 func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
