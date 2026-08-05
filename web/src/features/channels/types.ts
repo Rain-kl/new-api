@@ -91,6 +91,10 @@ export interface ChannelSettings {
   messages_role_compatibility_enabled?: boolean
   messages_role_allowed_list?: string[]
   messages_role_fallback?: string
+  codex_compat_enabled?: boolean
+  codex_client_version?: string
+  codex_client_name?: string
+  codex_identity_mode?: 'auto' | 'passthrough' | 'synthesize' | string
 }
 
 export interface ChannelOtherSettings {

@@ -150,8 +150,13 @@ import { useChannelMutateForm } from '../../hooks/use-channel-mutate-form'
 import {
   CHANNEL_FORM_DEFAULT_VALUES,
   CHANNEL_TYPE_ADVANCED_CUSTOM,
+  CHANNEL_TYPE_SUB2API,
   channelFormSchema,
   channelsQueryKeys,
+  CODEX_IDENTITY_MODE_AUTO,
+  CODEX_IDENTITY_MODE_PASSTHROUGH,
+  CODEX_IDENTITY_MODE_SYNTHESIZE,
+  DEFAULT_CODEX_CLIENT_VERSION,
   DEFAULT_MESSAGES_ROLE_ALLOWED_LIST,
   DEFAULT_MESSAGES_ROLE_FALLBACK,
   getAdvancedCustomStats,
@@ -294,6 +299,10 @@ const SENSITIVE_FORM_FIELDS = [
   'messages_role_compatibility_enabled',
   'messages_role_allowed_list',
   'messages_role_fallback',
+  'codex_compat_enabled',
+  'codex_client_version',
+  'codex_client_name',
+  'codex_identity_mode',
   'allow_service_tier',
   'disable_store',
   'allow_safety_identifier',
@@ -347,6 +356,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.pass_through_body_enabled ||
     values.system_prompt_override ||
     values.messages_role_compatibility_enabled ||
+    values.codex_compat_enabled ||
     (values.http_protocol && values.http_protocol !== 'auto') ||
     (values.http2_connection_shards != null &&
       values.http2_connection_shards > 1) ||
@@ -752,6 +762,7 @@ export function ChannelMutateDrawer({
   const currentForceFormat = form.watch('force_format')
   const currentThinkingToContent = form.watch('thinking_to_content')
   const currentPassThroughBodyEnabled = form.watch('pass_through_body_enabled')
+  const currentCodexCompatEnabled = form.watch('codex_compat_enabled')
   const currentDisableTaskPollingSleep = form.watch(
     'disable_task_polling_sleep'
   )
@@ -1030,6 +1041,7 @@ export function ChannelMutateDrawer({
     currentForceFormat ||
     currentThinkingToContent ||
     currentPassThroughBodyEnabled ||
+    currentCodexCompatEnabled ||
     currentDisableTaskPollingSleep ||
     currentProxy?.trim() ||
     currentSystemPrompt?.trim() ||
@@ -4156,6 +4168,211 @@ export function ChannelMutateDrawer({
                                   </FormItem>
                                 )}
                               />
+
+                              {currentType === CHANNEL_TYPE_SUB2API && (
+                                <>
+                                  <FormField
+                                    control={form.control}
+                                    name='codex_compat_enabled'
+                                    render={({ field }) => (
+                                      <FormItem className='flex items-center justify-between px-4 py-3'>
+                                        <div className='space-y-0.5'>
+                                          <FormLabel>
+                                            {t('Codex compatibility')}
+                                          </FormLabel>
+                                          <FormDescription>
+                                            {t(
+                                              'Shape Sub2API requests like official Codex CLI. Prefer Auto to preserve real CLI identity headers; Synthesize builds sticky session/thread/window IDs for non-CLI clients. Enable codex_cli_only on Sub2API OAuth accounts when required.'
+                                            )}
+                                          </FormDescription>
+                                        </div>
+                                        <FormControl>
+                                          <Switch
+                                            checked={field.value === true}
+                                            onCheckedChange={(checked) => {
+                                              field.onChange(checked)
+                                              if (checked) {
+                                                if (
+                                                  !form
+                                                    .getValues(
+                                                      'codex_client_version'
+                                                    )
+                                                    ?.trim()
+                                                ) {
+                                                  form.setValue(
+                                                    'codex_client_version',
+                                                    DEFAULT_CODEX_CLIENT_VERSION,
+                                                    {
+                                                      shouldDirty: true,
+                                                      shouldValidate: true,
+                                                    }
+                                                  )
+                                                }
+                                                if (
+                                                  !form.getValues(
+                                                    'codex_identity_mode'
+                                                  )
+                                                ) {
+                                                  form.setValue(
+                                                    'codex_identity_mode',
+                                                    CODEX_IDENTITY_MODE_AUTO,
+                                                    {
+                                                      shouldDirty: true,
+                                                      shouldValidate: true,
+                                                    }
+                                                  )
+                                                }
+                                              }
+                                            }}
+                                          />
+                                        </FormControl>
+                                      </FormItem>
+                                    )}
+                                  />
+
+                                  {currentCodexCompatEnabled && (
+                                    <div className='space-y-4 border-t px-4 py-3'>
+                                      <FormField
+                                        control={form.control}
+                                        name='codex_client_version'
+                                        render={({ field }) => (
+                                          <FormItem>
+                                            <FormLabel>
+                                              {t('Codex client version')}
+                                            </FormLabel>
+                                            <FormControl>
+                                              <Input
+                                                placeholder={
+                                                  DEFAULT_CODEX_CLIENT_VERSION
+                                                }
+                                                {...field}
+                                              />
+                                            </FormControl>
+                                            <FormDescription>
+                                              {t(
+                                                'Synthetic User-Agent engine version (X.Y.Z). Required for Auto and Synthesize identity modes.'
+                                              )}
+                                            </FormDescription>
+                                            <FormMessage />
+                                          </FormItem>
+                                        )}
+                                      />
+
+                                      <FormField
+                                        control={form.control}
+                                        name='codex_client_name'
+                                        render={({ field }) => (
+                                          <FormItem>
+                                            <FormLabel>
+                                              {t('Codex client name')}
+                                            </FormLabel>
+                                            <FormControl>
+                                              <Input
+                                                placeholder='codex_cli_rs'
+                                                {...field}
+                                              />
+                                            </FormControl>
+                                            <FormDescription>
+                                              {t(
+                                                'Synthetic originator / User-Agent client segment. Leave empty to use codex_cli_rs.'
+                                              )}
+                                            </FormDescription>
+                                            <FormMessage />
+                                          </FormItem>
+                                        )}
+                                      />
+
+                                      <FormField
+                                        control={form.control}
+                                        name='codex_identity_mode'
+                                        render={({ field }) => (
+                                          <FormItem>
+                                            <FormLabel>
+                                              {t('Codex identity mode')}
+                                            </FormLabel>
+                                            <Select
+                                              items={[
+                                                {
+                                                  value:
+                                                    CODEX_IDENTITY_MODE_AUTO,
+                                                  label: t('Auto'),
+                                                },
+                                                {
+                                                  value:
+                                                    CODEX_IDENTITY_MODE_PASSTHROUGH,
+                                                  label: t('Passthrough'),
+                                                },
+                                                {
+                                                  value:
+                                                    CODEX_IDENTITY_MODE_SYNTHESIZE,
+                                                  label: t('Synthesize'),
+                                                },
+                                              ]}
+                                              value={
+                                                field.value ||
+                                                CODEX_IDENTITY_MODE_AUTO
+                                              }
+                                              onValueChange={(value) => {
+                                                if (
+                                                  value ===
+                                                    CODEX_IDENTITY_MODE_PASSTHROUGH ||
+                                                  value ===
+                                                    CODEX_IDENTITY_MODE_SYNTHESIZE
+                                                ) {
+                                                  field.onChange(value)
+                                                } else {
+                                                  field.onChange(
+                                                    CODEX_IDENTITY_MODE_AUTO
+                                                  )
+                                                }
+                                              }}
+                                            >
+                                              <FormControl>
+                                                <SelectTrigger>
+                                                  <SelectValue />
+                                                </SelectTrigger>
+                                              </FormControl>
+                                              <SelectContent
+                                                alignItemWithTrigger={false}
+                                              >
+                                                <SelectGroup>
+                                                  <SelectItem
+                                                    value={
+                                                      CODEX_IDENTITY_MODE_AUTO
+                                                    }
+                                                  >
+                                                    {t('Auto')}
+                                                  </SelectItem>
+                                                  <SelectItem
+                                                    value={
+                                                      CODEX_IDENTITY_MODE_PASSTHROUGH
+                                                    }
+                                                  >
+                                                    {t('Passthrough')}
+                                                  </SelectItem>
+                                                  <SelectItem
+                                                    value={
+                                                      CODEX_IDENTITY_MODE_SYNTHESIZE
+                                                    }
+                                                  >
+                                                    {t('Synthesize')}
+                                                  </SelectItem>
+                                                </SelectGroup>
+                                              </SelectContent>
+                                            </Select>
+                                            <FormDescription>
+                                              {t(
+                                                'Auto preserves official Codex CLI identity when present, otherwise synthesizes sticky IDs. Passthrough never rewrites identity headers. Synthesize always builds sticky session, thread, and window IDs.'
+                                              )}
+                                            </FormDescription>
+                                            <FormMessage />
+                                          </FormItem>
+                                        )}
+                                      />
+                                    </div>
+                                  )}
+                                </>
+                              )}
 
                               <FormField
                                 control={form.control}

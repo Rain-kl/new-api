@@ -56,6 +56,17 @@ export const DEFAULT_MESSAGES_ROLE_ALLOWED_LIST = [
 
 export const DEFAULT_MESSAGES_ROLE_FALLBACK = 'system'
 
+/** Sub2API channel type (Codex compatibility settings apply only here). */
+export const CHANNEL_TYPE_SUB2API = 59
+
+export const CODEX_IDENTITY_MODE_AUTO = 'auto'
+export const CODEX_IDENTITY_MODE_PASSTHROUGH = 'passthrough'
+export const CODEX_IDENTITY_MODE_SYNTHESIZE = 'synthesize'
+export const DEFAULT_CODEX_CLIENT_VERSION = '0.146.0'
+
+/** Leading X.Y.Z required; optional pre-release suffix allowed (matches backend). */
+const CODEX_CLIENT_VERSION_PATTERN = /^\d+\.\d+\.\d+/
+
 function isOptionalProxyURL(value: string | undefined): boolean {
   const trimmedValue = value?.trim() || ''
   if (!trimmedValue) return true
@@ -275,6 +286,17 @@ export const channelFormSchema = z
     messages_role_compatibility_enabled: z.boolean().optional(),
     messages_role_allowed_list: z.array(z.string()).optional(),
     messages_role_fallback: z.string().optional(),
+    // Sub2API Codex compatibility (stored in setting JSON, type 59 only)
+    codex_compat_enabled: z.boolean().optional(),
+    codex_client_version: z.string().optional(),
+    codex_client_name: z.string().optional(),
+    codex_identity_mode: z
+      .enum([
+        CODEX_IDENTITY_MODE_AUTO,
+        CODEX_IDENTITY_MODE_PASSTHROUGH,
+        CODEX_IDENTITY_MODE_SYNTHESIZE,
+      ])
+      .optional(),
     // Type-specific settings (stored in settings JSON)
     is_enterprise_account: z.boolean().optional(), // OpenRouter specific
     vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
@@ -369,6 +391,33 @@ export const channelFormSchema = z
           'messages_role_fallback',
           'Fallback role must be included in the allowed roles list'
         )
+      }
+    }
+
+    if (
+      data.type === CHANNEL_TYPE_SUB2API &&
+      data.codex_compat_enabled === true
+    ) {
+      const mode =
+        data.codex_identity_mode || CODEX_IDENTITY_MODE_AUTO
+      if (
+        mode === CODEX_IDENTITY_MODE_AUTO ||
+        mode === CODEX_IDENTITY_MODE_SYNTHESIZE
+      ) {
+        const version = data.codex_client_version?.trim() || ''
+        if (!version) {
+          addRequiredIssue(
+            ctx,
+            'codex_client_version',
+            'Codex client version is required when Codex compatibility is enabled'
+          )
+        } else if (!CODEX_CLIENT_VERSION_PATTERN.test(version)) {
+          addRequiredIssue(
+            ctx,
+            'codex_client_version',
+            'Codex client version must start with X.Y.Z (e.g. 0.146.0)'
+          )
+        }
       }
     }
 
@@ -477,6 +526,10 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   messages_role_compatibility_enabled: false,
   messages_role_allowed_list: [...DEFAULT_MESSAGES_ROLE_ALLOWED_LIST],
   messages_role_fallback: DEFAULT_MESSAGES_ROLE_FALLBACK,
+  codex_compat_enabled: false,
+  codex_client_version: DEFAULT_CODEX_CLIENT_VERSION,
+  codex_client_name: '',
+  codex_identity_mode: CODEX_IDENTITY_MODE_AUTO,
   // Type-specific settings
   is_enterprise_account: false,
   vertex_key_type: 'json',
@@ -520,6 +573,13 @@ export function transformChannelToFormDefaults(
     messages_role_compatibility_enabled: false,
     messages_role_allowed_list: [...DEFAULT_MESSAGES_ROLE_ALLOWED_LIST],
     messages_role_fallback: DEFAULT_MESSAGES_ROLE_FALLBACK,
+    codex_compat_enabled: false,
+    codex_client_version: DEFAULT_CODEX_CLIENT_VERSION,
+    codex_identity_mode: CODEX_IDENTITY_MODE_AUTO as
+      | 'auto'
+      | 'passthrough'
+      | 'synthesize',
+    codex_client_name: '',
   }
 
   if (channel.setting) {
@@ -534,6 +594,15 @@ export function transformChannelToFormDefaults(
             .map((role: unknown) => String(role).trim())
             .filter(Boolean)
         : []
+      const identityModeRaw =
+        typeof parsed.codex_identity_mode === 'string'
+          ? parsed.codex_identity_mode.trim().toLowerCase()
+          : ''
+      const identityMode =
+        identityModeRaw === CODEX_IDENTITY_MODE_PASSTHROUGH ||
+        identityModeRaw === CODEX_IDENTITY_MODE_SYNTHESIZE
+          ? identityModeRaw
+          : CODEX_IDENTITY_MODE_AUTO
       extraSettings = {
         force_format: parsed.force_format || false,
         thinking_to_content: parsed.thinking_to_content || false,
@@ -555,6 +624,17 @@ export function transformChannelToFormDefaults(
           parsed.messages_role_fallback.trim()
             ? parsed.messages_role_fallback.trim()
             : DEFAULT_MESSAGES_ROLE_FALLBACK,
+        codex_compat_enabled: parsed.codex_compat_enabled === true,
+        codex_client_version:
+          typeof parsed.codex_client_version === 'string' &&
+          parsed.codex_client_version.trim()
+            ? parsed.codex_client_version.trim()
+            : DEFAULT_CODEX_CLIENT_VERSION,
+        codex_client_name:
+          typeof parsed.codex_client_name === 'string'
+            ? parsed.codex_client_name
+            : '',
+        codex_identity_mode: identityMode,
       }
     } catch (error) {
       // eslint-disable-next-line no-console
@@ -698,6 +778,23 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
         : [...DEFAULT_MESSAGES_ROLE_ALLOWED_LIST]
     settingObj.messages_role_fallback =
       formData.messages_role_fallback?.trim() || DEFAULT_MESSAGES_ROLE_FALLBACK
+  }
+
+  // Sub2API Codex compatibility (type 59 only)
+  if (formData.type === CHANNEL_TYPE_SUB2API) {
+    if (formData.codex_compat_enabled === true) {
+      settingObj.codex_compat_enabled = true
+      settingObj.codex_client_version =
+        formData.codex_client_version?.trim() || ''
+      const clientName = formData.codex_client_name?.trim() || ''
+      if (clientName) {
+        settingObj.codex_client_name = clientName
+      }
+      settingObj.codex_identity_mode =
+        formData.codex_identity_mode || CODEX_IDENTITY_MODE_AUTO
+    } else {
+      settingObj.codex_compat_enabled = false
+    }
   }
 
   return JSON.stringify(settingObj)

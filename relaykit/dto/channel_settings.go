@@ -32,6 +32,20 @@ type ChannelSettings struct {
 	// MessagesRoleFallback is used when a message role is not in the allowed list.
 	// Empty means DefaultMessagesRoleFallback when compatibility is enabled.
 	MessagesRoleFallback string `json:"messages_role_fallback,omitempty"`
+
+	// CodexCompatEnabled enables Sub2API Codex-compatible identity headers/body
+	// shaping for type-59 channels. Default false (no behavior change).
+	CodexCompatEnabled bool `json:"codex_compat_enabled,omitempty"`
+	// CodexClientVersion is the synthetic client version (X.Y.Z[+suffix]) used
+	// when synthesizing User-Agent. Required when compat is enabled and mode is
+	// auto or synthesize.
+	CodexClientVersion string `json:"codex_client_version,omitempty"`
+	// CodexClientName is the synthetic originator / UA client segment.
+	// Empty defaults to DefaultCodexClientName at runtime.
+	CodexClientName string `json:"codex_client_name,omitempty"`
+	// CodexIdentityMode controls identity header policy: auto|passthrough|synthesize.
+	// Empty is treated as auto.
+	CodexIdentityMode string `json:"codex_identity_mode,omitempty"`
 }
 
 const (
@@ -40,7 +54,16 @@ const (
 	MaxHTTP2ConnectionShards = 8
 
 	DefaultMessagesRoleFallback = "system"
+
+	CodexIdentityModeAuto        = "auto"
+	CodexIdentityModePassthrough = "passthrough"
+	CodexIdentityModeSynthesize  = "synthesize"
+	DefaultCodexClientName       = "codex_cli_rs"
 )
+
+// codexClientVersionPattern requires a leading numeric triple (X.Y.Z); optional
+// suffix after the triple is allowed (e.g. 0.146.0-beta).
+var codexClientVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+`)
 
 // DefaultMessagesRoleAllowedList matches common OpenAI-compatible role enums that
 // reject newer roles such as "developer".
@@ -85,6 +108,33 @@ func (s *ChannelSettings) ValidateMessagesRoleCompatibility() error {
 		}
 	}
 	return fmt.Errorf("messages_role_fallback %q must be included in messages_role_allowed_list", fallback)
+}
+
+// ValidateCodexCompat validates Sub2API Codex compatibility channel settings.
+// No-op when CodexCompatEnabled is false.
+func (s *ChannelSettings) ValidateCodexCompat() error {
+	if s == nil || !s.CodexCompatEnabled {
+		return nil
+	}
+	mode := strings.ToLower(strings.TrimSpace(s.CodexIdentityMode))
+	if mode == "" {
+		mode = CodexIdentityModeAuto
+	}
+	switch mode {
+	case CodexIdentityModeAuto, CodexIdentityModePassthrough, CodexIdentityModeSynthesize:
+	default:
+		return fmt.Errorf("invalid codex_identity_mode: %s", s.CodexIdentityMode)
+	}
+	if mode == CodexIdentityModeAuto || mode == CodexIdentityModeSynthesize {
+		version := strings.TrimSpace(s.CodexClientVersion)
+		if version == "" {
+			return fmt.Errorf("codex_client_version is required when codex_compat is enabled with identity mode %s", mode)
+		}
+		if !codexClientVersionPattern.MatchString(version) {
+			return fmt.Errorf("invalid codex_client_version: %s", s.CodexClientVersion)
+		}
+	}
+	return nil
 }
 
 // ApplyMessagesRoleCompatibility remaps message roles that are not in the
