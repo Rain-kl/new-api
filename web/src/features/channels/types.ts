@@ -97,6 +97,12 @@ export interface ChannelSettings {
   codex_client_name?: string
   codex_identity_mode?: 'auto' | 'passthrough' | 'synthesize' | string
   chat_completions_to_responses?: boolean
+  reasoning_effort_rules_enabled?: boolean
+  reasoning_effort_rules?: Array<{
+    model: string
+    effort: string
+    force?: boolean
+  }>
 }
 
 export interface ChannelOtherSettings {

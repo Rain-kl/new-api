@@ -32,16 +32,22 @@ func prepareClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *
 		(strings.HasPrefix(request.Model, "claude-opus-4-6") ||
 			strings.HasPrefix(request.Model, "claude-opus-4-7") ||
 			strings.HasPrefix(request.Model, "claude-opus-4-8")) {
+		// Always strip effort suffix from model name; only skip overwriting Thinking/OutputConfig when channel owns effort.
 		request.Model = baseModel
-		request.Thinking = &dto.Thinking{
-			Type: "adaptive",
+		if !info.ReasoningEffortFromChannel {
+			request.Thinking = &dto.Thinking{
+				Type: "adaptive",
+			}
+			request.OutputConfig = json.RawMessage(fmt.Sprintf(`{"effort":"%s"}`, effortLevel))
 		}
-		request.OutputConfig = json.RawMessage(fmt.Sprintf(`{"effort":"%s"}`, effortLevel))
+		// Always sanitize sampling for opus models after suffix strip (avoids upstream 400 even when FromChannel).
 		if strings.HasPrefix(request.Model, "claude-opus-4-7") ||
 			strings.HasPrefix(request.Model, "claude-opus-4-8") {
 			// Opus 4.7/4.8 reject non-default temperature/top_p/top_k with 400
-			// and defaults display to "omitted"; restore the 4.6 visible summary.
-			request.Thinking.Display = "summarized"
+			// and defaults display to "omitted"; restore the 4.6 visible summary when thinking is present.
+			if request.Thinking != nil {
+				request.Thinking.Display = "summarized"
+			}
 			request.Temperature = nil
 			request.TopP = nil
 			request.TopK = nil
@@ -51,16 +57,14 @@ func prepareClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *
 		info.UpstreamModelName = request.Model
 	} else if model_setting.GetClaudeSettings().ThinkingAdapterEnabled &&
 		strings.HasSuffix(request.Model, "-thinking") {
-		if request.Thinking == nil {
-			baseModel := strings.TrimSuffix(request.Model, "-thinking")
+		// Channel rules may already own effort via OutputConfig; still strip -thinking and sanitize sampling.
+		baseModel := strings.TrimSuffix(request.Model, "-thinking")
+		if !info.ReasoningEffortFromChannel && request.Thinking == nil {
 			if strings.HasPrefix(baseModel, "claude-opus-4-7") ||
 				strings.HasPrefix(baseModel, "claude-opus-4-8") {
 				// Opus 4.7/4.8 reject thinking.type="enabled"; use adaptive at high effort.
 				request.Thinking = &dto.Thinking{Type: "adaptive", Display: "summarized"}
 				request.OutputConfig = json.RawMessage(`{"effort":"high"}`)
-				request.Temperature = nil
-				request.TopP = nil
-				request.TopK = nil
 			} else {
 				// BudgetTokens must be greater than 1024.
 				if request.MaxTokens == nil || *request.MaxTokens < 1280 {
@@ -71,12 +75,23 @@ func prepareClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *
 					Type:         "enabled",
 					BudgetTokens: common.GetPointer[int](int(float64(*request.MaxTokens) * model_setting.GetClaudeSettings().ThinkingAdapterBudgetTokensPercentage)),
 				}
-				// https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#important-considerations-when-using-extended-thinking
-				request.Temperature = common.GetPointer[float64](1.0)
 			}
 		}
+		// Always apply sampling sanitize for thinking-suffix models (FromChannel or not).
+		if strings.HasPrefix(baseModel, "claude-opus-4-7") ||
+			strings.HasPrefix(baseModel, "claude-opus-4-8") {
+			if request.Thinking != nil {
+				request.Thinking.Display = "summarized"
+			}
+			request.Temperature = nil
+			request.TopP = nil
+			request.TopK = nil
+		} else if request.Thinking != nil {
+			// https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#important-considerations-when-using-extended-thinking
+			request.Temperature = common.GetPointer[float64](1.0)
+		}
 		if !model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
-			request.Model = strings.TrimSuffix(request.Model, "-thinking")
+			request.Model = baseModel
 		}
 		info.UpstreamModelName = request.Model
 	}
@@ -127,6 +142,13 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	err = helper.ModelMappedHelper(c, info, request)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
+	}
+
+	// Apply channel reasoning-effort rules before prepareClaudeRequest (suffix handling in Task 4).
+	// Skip when raw body pass-through is used so we do not mutate a request that will not be sent.
+	if !model_setting.GetGlobalSettings().PassThroughRequestEnabled &&
+		!info.ChannelSetting.PassThroughBodyEnabled {
+		relaycommon.ApplyChannelReasoningEffortClaude(info, request)
 	}
 
 	adaptor := GetAdaptor(info.ApiType)

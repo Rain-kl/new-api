@@ -54,6 +54,18 @@ type ChannelSettings struct {
 	// When true, all chat-completions traffic on this channel is converted
 	// regardless of the global chat_completions_to_responses_policy.
 	ChatCompletionsToResponses bool `json:"chat_completions_to_responses,omitempty"`
+
+	// ReasoningEffortRulesEnabled enables per-model reasoning effort rules on this channel.
+	ReasoningEffortRulesEnabled bool `json:"reasoning_effort_rules_enabled,omitempty"`
+	// ReasoningEffortRules matches OriginModelName (client model or mapping source key).
+	ReasoningEffortRules []ReasoningEffortRule `json:"reasoning_effort_rules,omitempty"`
+}
+
+// ReasoningEffortRule is a per-model reasoning effort override for a channel.
+type ReasoningEffortRule struct {
+	Model  string `json:"model"`
+	Effort string `json:"effort"`
+	Force  bool   `json:"force,omitempty"`
 }
 
 const (
@@ -116,6 +128,31 @@ func (s *ChannelSettings) ValidateMessagesRoleCompatibility() error {
 		}
 	}
 	return fmt.Errorf("messages_role_fallback %q must be included in messages_role_allowed_list", fallback)
+}
+
+// ValidateReasoningEffortRules validates per-model reasoning effort rules.
+// Empty rules are always OK. When rules are present, model/effort must be non-empty
+// after trim and model keys must be unique (case-sensitive, after trim).
+func (s *ChannelSettings) ValidateReasoningEffortRules() error {
+	if s == nil || len(s.ReasoningEffortRules) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(s.ReasoningEffortRules))
+	for i, rule := range s.ReasoningEffortRules {
+		model := strings.TrimSpace(rule.Model)
+		effort := strings.TrimSpace(rule.Effort)
+		if model == "" {
+			return fmt.Errorf("reasoning_effort_rules[%d].model is required", i)
+		}
+		if effort == "" {
+			return fmt.Errorf("reasoning_effort_rules[%d].effort is required", i)
+		}
+		if _, ok := seen[model]; ok {
+			return fmt.Errorf("reasoning_effort_rules contains duplicate model: %s", model)
+		}
+		seen[model] = struct{}{}
+	}
+	return nil
 }
 
 // ValidateCodexCompat validates Sub2API Codex compatibility channel settings.

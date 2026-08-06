@@ -78,15 +78,24 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			request.MaxCompletionTokens = request.MaxTokens
 			request.MaxTokens = nil
 		}
+		// Channel rules may already own effort; still strip -high/-low from model name.
 		if strings.HasSuffix(request.Model, "-high") {
-			request.ReasoningEffort = "high"
+			if info == nil || !info.ReasoningEffortFromChannel {
+				request.ReasoningEffort = "high"
+			}
 			request.Model = strings.TrimSuffix(request.Model, "-high")
 		} else if strings.HasSuffix(request.Model, "-low") {
-			request.ReasoningEffort = "low"
+			if info == nil || !info.ReasoningEffortFromChannel {
+				request.ReasoningEffort = "low"
+			}
 			request.Model = strings.TrimSuffix(request.Model, "-low")
 		}
-		info.ReasoningEffort = request.ReasoningEffort
-		info.UpstreamModelName = request.Model
+		if info != nil {
+			if !info.ReasoningEffortFromChannel {
+				info.ReasoningEffort = request.ReasoningEffort
+			}
+			info.UpstreamModelName = request.Model
+		}
 	}
 	return request, nil
 }

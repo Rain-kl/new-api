@@ -344,15 +344,18 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			request.LogProbs = nil
 		}
 
-		// 转换模型推理力度后缀
+		// 转换模型推理力度后缀；channel 规则已设置时只剥后缀，不覆盖 effort
 		effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(info.UpstreamModelName)
 		if effort != "" {
-			request.ReasoningEffort = effort
+			if !info.ReasoningEffortFromChannel {
+				request.ReasoningEffort = effort
+			}
 			info.UpstreamModelName = originModel
 			request.Model = originModel
 		}
-
-		info.ReasoningEffort = request.ReasoningEffort
+		if !info.ReasoningEffortFromChannel {
+			info.ReasoningEffort = request.ReasoningEffort
+		}
 
 		// o系列模型developer适配（o1-mini除外）
 		if !strings.HasPrefix(info.UpstreamModelName, "o1-mini") && !strings.HasPrefix(info.UpstreamModelName, "o1-preview") {
@@ -602,20 +605,24 @@ func detectImageMimeType(filename string) string {
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	//  转换模型推理力度后缀
+	// 转换模型推理力度后缀；channel 规则已设置时只剥后缀，不覆盖 effort
 	effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(request.Model)
 	if effort != "" {
-		if request.Reasoning == nil {
-			request.Reasoning = &dto.Reasoning{
-				Effort: effort,
+		if info == nil || !info.ReasoningEffortFromChannel {
+			if request.Reasoning == nil {
+				request.Reasoning = &dto.Reasoning{
+					Effort: effort,
+				}
+			} else {
+				request.Reasoning.Effort = effort
 			}
-		} else {
-			request.Reasoning.Effort = effort
 		}
 		request.Model = originModel
 	}
 	if info != nil && request.Reasoning != nil && request.Reasoning.Effort != "" {
-		info.ReasoningEffort = request.Reasoning.Effort
+		if !info.ReasoningEffortFromChannel {
+			info.ReasoningEffort = request.Reasoning.Effort
+		}
 	}
 	return request, nil
 }

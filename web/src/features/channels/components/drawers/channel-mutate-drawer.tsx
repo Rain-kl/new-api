@@ -189,6 +189,10 @@ import {
 import { ParamOverrideEditorDialog } from '../dialogs/param-override-editor-dialog'
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
 import { ModelMappingEditor } from '../model-mapping-editor'
+import {
+  collectReasoningModelOptions,
+  ReasoningEffortRulesEditor,
+} from '../reasoning-effort-rules-editor'
 import { ChannelProxyFields } from './channel-proxy-fields'
 import {
   ChannelAdvancedSection,
@@ -306,6 +310,8 @@ const SENSITIVE_FORM_FIELDS = [
   'codex_client_name',
   'codex_identity_mode',
   'chat_completions_to_responses',
+  'reasoning_effort_rules_enabled',
+  'reasoning_effort_rules',
   'allow_service_tier',
   'disable_store',
   'allow_safety_identifier',
@@ -362,6 +368,9 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.messages_role_compatibility_enabled ||
     values.codex_compat_enabled ||
     values.chat_completions_to_responses ||
+    values.reasoning_effort_rules_enabled ||
+    (values.reasoning_effort_rules &&
+      values.reasoning_effort_rules.length > 0) ||
     (values.http_protocol && values.http_protocol !== 'auto') ||
     (values.http2_connection_shards != null &&
       values.http2_connection_shards > 1) ||
@@ -771,6 +780,10 @@ export function ChannelMutateDrawer({
   const currentChatCompletionsToResponses = form.watch(
     'chat_completions_to_responses'
   )
+  const currentReasoningEffortRulesEnabled = form.watch(
+    'reasoning_effort_rules_enabled'
+  )
+  const currentReasoningEffortRules = form.watch('reasoning_effort_rules')
   const currentDisableTaskPollingSleep = form.watch(
     'disable_task_polling_sleep'
   )
@@ -1046,12 +1059,20 @@ export function ChannelMutateDrawer({
     hasConfiguredOverrideValue(currentParamOverride) ||
     hasConfiguredOverrideValue(currentHeaderOverride)
   )
+  const reasoningModelOptions = useMemo(
+    () =>
+      collectReasoningModelOptions(currentModels, currentModelMapping),
+    [currentModels, currentModelMapping]
+  )
   const extraSettingsConfigured = Boolean(
     currentForceFormat ||
     currentThinkingToContent ||
     currentPassThroughBodyEnabled ||
     currentCodexCompatEnabled ||
     currentChatCompletionsToResponses ||
+    currentReasoningEffortRulesEnabled ||
+    (currentReasoningEffortRules &&
+      currentReasoningEffortRules.length > 0) ||
     currentDisableTaskPollingSleep ||
     currentProxy?.trim() ||
     (currentProxyId != null && currentProxyId > 0) ||
@@ -4437,6 +4458,31 @@ export function ChannelMutateDrawer({
                                 )}
                               />
                             </div>
+
+                            <ReasoningEffortRulesEditor
+                              enabled={
+                                currentReasoningEffortRulesEnabled === true
+                              }
+                              rules={currentReasoningEffortRules || []}
+                              onEnabledChange={(enabled) => {
+                                form.setValue(
+                                  'reasoning_effort_rules_enabled',
+                                  enabled,
+                                  {
+                                    shouldDirty: true,
+                                    shouldValidate: true,
+                                  }
+                                )
+                              }}
+                              onRulesChange={(rules) => {
+                                form.setValue('reasoning_effort_rules', rules, {
+                                  shouldDirty: true,
+                                  shouldValidate: true,
+                                })
+                              }}
+                              modelOptions={reasoningModelOptions}
+                              disabled={sensitiveLocked}
+                            />
 
                             <ChannelProxyFields form={form} />
 

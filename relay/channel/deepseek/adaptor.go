@@ -137,19 +137,23 @@ func applyDeepSeekV4OpenAIThinkingSuffix(info *relaycommon.RelayInfo, request *d
 	if !ok {
 		return nil
 	}
+	// Always strip suffix from model name; channel rules own effort when FromChannel.
+	request.Model = baseModel
+	if info != nil && info.ChannelMeta != nil {
+		info.UpstreamModelName = baseModel
+	}
+	if info != nil && info.ReasoningEffortFromChannel {
+		return nil
+	}
 	thinking, err := common.Marshal(map[string]string{
 		"type": thinkingType,
 	})
 	if err != nil {
 		return fmt.Errorf("error marshalling thinking: %w", err)
 	}
-	request.Model = baseModel
 	request.THINKING = thinking
 	request.ReasoningEffort = effort
 	if info != nil {
-		if info.ChannelMeta != nil {
-			info.UpstreamModelName = baseModel
-		}
 		info.ReasoningEffort = effort
 	}
 	return nil
@@ -164,7 +168,14 @@ func applyDeepSeekV4ClaudeThinkingSuffix(info *relaycommon.RelayInfo, request *d
 	if !ok {
 		return nil
 	}
+	// Always strip suffix from model name; channel rules own effort when FromChannel.
 	request.Model = baseModel
+	if info != nil && info.ChannelMeta != nil {
+		info.UpstreamModelName = baseModel
+	}
+	if info != nil && info.ReasoningEffortFromChannel {
+		return nil
+	}
 	request.Thinking = &dto.Thinking{Type: thinkingType}
 	if effort == "" {
 		request.OutputConfig = nil
@@ -178,9 +189,6 @@ func applyDeepSeekV4ClaudeThinkingSuffix(info *relaycommon.RelayInfo, request *d
 		request.OutputConfig = outputConfig
 	}
 	if info != nil {
-		if info.ChannelMeta != nil {
-			info.UpstreamModelName = baseModel
-		}
 		info.ReasoningEffort = effort
 	}
 	return nil
@@ -207,19 +215,22 @@ func applyDeepSeekV4ResponsesThinkingSuffix(info *relaycommon.RelayInfo, request
 	}
 	baseModel, thinkingType, effort, ok := reasoning.ParseDeepSeekV4ThinkingSuffix(modelName)
 	if ok {
-		if thinkingType == "disabled" {
-			effort = "none"
-		}
+		// Always strip suffix from model name; channel rules own effort when FromChannel.
 		request.Model = baseModel
-		if request.Reasoning == nil {
-			request.Reasoning = &dto.Reasoning{}
-		}
-		request.Reasoning.Effort = effort
 		if info != nil && info.ChannelMeta != nil {
 			info.UpstreamModelName = baseModel
 		}
+		if info == nil || !info.ReasoningEffortFromChannel {
+			if thinkingType == "disabled" {
+				effort = "none"
+			}
+			if request.Reasoning == nil {
+				request.Reasoning = &dto.Reasoning{}
+			}
+			request.Reasoning.Effort = effort
+		}
 	}
-	if info != nil && request.Reasoning != nil {
+	if info != nil && request.Reasoning != nil && !info.ReasoningEffortFromChannel {
 		info.ReasoningEffort = request.Reasoning.Effort
 	}
 }

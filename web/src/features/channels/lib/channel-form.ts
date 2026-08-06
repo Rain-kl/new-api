@@ -300,6 +300,17 @@ export const channelFormSchema = z
       .optional(),
     // Sub2API: convert Chat Completions → Responses before upstream
     chat_completions_to_responses: z.boolean().optional(),
+    // Reasoning effort rules (stored in setting JSON)
+    reasoning_effort_rules_enabled: z.boolean().optional(),
+    reasoning_effort_rules: z
+      .array(
+        z.object({
+          model: z.string(),
+          effort: z.string(),
+          force: z.boolean().optional(),
+        })
+      )
+      .optional(),
     // Type-specific settings (stored in settings JSON)
     is_enterprise_account: z.boolean().optional(), // OpenRouter specific
     vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
@@ -483,6 +494,49 @@ export const channelFormSchema = z
         ERROR_MESSAGES.INVALID_HTTP1_WITH_SHARDS
       )
     }
+
+    // Reasoning effort rules: empty list with switch on is allowed (runtime no-op).
+    // When enabled or any row has content, each retained row needs model+effort; models unique.
+    const reasoningRules = data.reasoning_effort_rules || []
+    const hasReasoningRuleContent = reasoningRules.some(
+      (r) => (r.model?.trim() || '') !== '' || (r.effort?.trim() || '') !== ''
+    )
+    if (data.reasoning_effort_rules_enabled || hasReasoningRuleContent) {
+      const seenModels = new Map<string, number>()
+      reasoningRules.forEach((rule, index) => {
+        const model = rule.model?.trim() || ''
+        const effort = rule.effort?.trim() || ''
+        if (!model && !effort) {
+          return
+        }
+        if (!model) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['reasoning_effort_rules', index, 'model'],
+            message: 'Model is required for each reasoning effort rule',
+          })
+        }
+        if (!effort) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['reasoning_effort_rules', index, 'effort'],
+            message: 'Effort is required for each reasoning effort rule',
+          })
+        }
+        if (model) {
+          const prev = seenModels.get(model)
+          if (prev !== undefined) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ['reasoning_effort_rules', index, 'model'],
+              message: 'Duplicate model in reasoning effort rules',
+            })
+          } else {
+            seenModels.set(model, index)
+          }
+        }
+      })
+    }
   })
 
 export type ChannelFormValues = z.infer<typeof channelFormSchema>
@@ -535,6 +589,8 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   codex_client_name: '',
   codex_identity_mode: CODEX_IDENTITY_MODE_AUTO,
   chat_completions_to_responses: false,
+  reasoning_effort_rules_enabled: false,
+  reasoning_effort_rules: [],
   // Type-specific settings
   is_enterprise_account: false,
   vertex_key_type: 'json',
@@ -587,6 +643,12 @@ export function transformChannelToFormDefaults(
       | 'synthesize',
     codex_client_name: '',
     chat_completions_to_responses: false,
+    reasoning_effort_rules_enabled: false,
+    reasoning_effort_rules: [] as Array<{
+      model: string
+      effort: string
+      force: boolean
+    }>,
   }
 
   if (channel.setting) {
@@ -649,6 +711,22 @@ export function transformChannelToFormDefaults(
         codex_identity_mode: identityMode,
         chat_completions_to_responses:
           parsed.chat_completions_to_responses === true,
+        reasoning_effort_rules_enabled:
+          parsed.reasoning_effort_rules_enabled === true,
+        reasoning_effort_rules: Array.isArray(parsed.reasoning_effort_rules)
+          ? parsed.reasoning_effort_rules.map((r: unknown) => {
+              const rule = r as {
+                model?: unknown
+                effort?: unknown
+                force?: unknown
+              }
+              return {
+                model: typeof rule?.model === 'string' ? rule.model : '',
+                effort: typeof rule?.effort === 'string' ? rule.effort : '',
+                force: rule?.force === true,
+              }
+            })
+          : [],
       }
     } catch (error) {
       // eslint-disable-next-line no-console
@@ -817,6 +895,27 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
     if (formData.chat_completions_to_responses === true) {
       settingObj.chat_completions_to_responses = true
     }
+  }
+
+  if (formData.reasoning_effort_rules_enabled) {
+    settingObj.reasoning_effort_rules_enabled = true
+  }
+  const reasoningEffortRules = (formData.reasoning_effort_rules || [])
+    .map((r) => ({
+      model: r.model?.trim() || '',
+      effort: r.effort?.trim() || '',
+      force: r.force === true,
+    }))
+    .filter((r) => r.model || r.effort)
+  if (reasoningEffortRules.length > 0) {
+    settingObj.reasoning_effort_rules = reasoningEffortRules.map((r) => {
+      const out: Record<string, unknown> = {
+        model: r.model,
+        effort: r.effort,
+      }
+      if (r.force) out.force = true
+      return out
+    })
   }
 
   return JSON.stringify(settingObj)

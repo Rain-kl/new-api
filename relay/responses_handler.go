@@ -71,6 +71,14 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
+	// Apply channel reasoning-effort rules before convert. Skip compact mode (no reasoning
+	// fields forwarded) and raw body pass-through (DTO not used for upstream body).
+	if info.RelayMode != relayconstant.RelayModeResponsesCompact &&
+		!model_setting.GetGlobalSettings().PassThroughRequestEnabled &&
+		!info.ChannelSetting.PassThroughBodyEnabled {
+		relaycommon.ApplyChannelReasoningEffortResponses(info, request)
+	}
+
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())

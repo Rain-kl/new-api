@@ -44,6 +44,13 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
+	// Apply channel reasoning-effort rules on the in-memory DTO before convert / chat→responses.
+	// Skip when raw body pass-through is used so we do not mutate a request that will not be sent.
+	if !model_setting.GetGlobalSettings().PassThroughRequestEnabled &&
+		!info.ChannelSetting.PassThroughBodyEnabled {
+		relaycommon.ApplyChannelReasoningEffortChat(info, request)
+	}
+
 	includeUsage := true
 	// 判断用户是否需要返回使用情况
 	if request.StreamOptions != nil {

@@ -110,6 +110,8 @@ type RelayInfo struct {
 	IsFirstRequest         bool
 	AudioUsage             bool
 	ReasoningEffort        string
+	// ReasoningEffortFromChannel is true when a channel reasoning effort rule was applied.
+	ReasoningEffortFromChannel bool
 	UserSetting            dto.UserSetting
 	UserEmail              string
 	UserQuota              int
