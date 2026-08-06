@@ -61,6 +61,11 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		if err != nil {
 			return nil, err
 		}
+		if info.ChannelSetting.ClaudeCompatEnabled {
+			if claudeReq, ok := result.Value.(*dto.ClaudeRequest); ok {
+				prependClaudeCodeSystemPrompt(claudeReq)
+			}
+		}
 		return result.Value, nil
 	default:
 		return nil, fmt.Errorf("converter %q does not support OpenAI chat completions requests", converter)
@@ -75,7 +80,16 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 
 	switch converter {
 	case relayconvert.ConverterNone:
-		return a.claudeAdaptor.ConvertClaudeRequest(c, info, request)
+		claudeRequest, err := a.claudeAdaptor.ConvertClaudeRequest(c, info, request)
+		if err != nil {
+			return nil, err
+		}
+		if info.ChannelSetting.ClaudeCompatEnabled {
+			if claudeReq, ok := claudeRequest.(*dto.ClaudeRequest); ok {
+				prependClaudeCodeSystemPrompt(claudeReq)
+			}
+		}
+		return claudeRequest, nil
 	case relayconvert.ConverterClaudeMessagesToOpenAIChat:
 		result, err := service.ConvertRequestByID(c, info, converter, request)
 		if err != nil {
@@ -141,6 +155,9 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		claudeRequest, ok := result.Value.(*dto.ClaudeRequest)
 		if !ok {
 			return nil, fmt.Errorf("expected Anthropic Messages request, got %T", result.Value)
+		}
+		if info.ChannelSetting.ClaudeCompatEnabled {
+			prependClaudeCodeSystemPrompt(claudeRequest)
 		}
 		return claudeRequest, nil
 	case relayconvert.ConverterOpenAIResponsesToGemini:
@@ -270,6 +287,12 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *
 
 	if shouldApplyClaudeHeaders(a.converter, info) {
 		applyClaudeHeaders(c, header, info)
+	}
+	if info.ChannelSetting.CodexCompatEnabled {
+		applyCodexIdentityHeaders(c, header, info)
+	}
+	if info.ChannelSetting.ClaudeCompatEnabled && shouldApplyClaudeHeaders(a.converter, info) {
+		applyClaudeCodeHeaders(c, header, info)
 	}
 
 	return nil

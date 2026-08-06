@@ -44,6 +44,10 @@ type ChannelSettings struct {
 	// CodexClientName is the synthetic originator / UA client segment.
 	// Empty defaults to DefaultCodexClientName at runtime.
 	CodexClientName string `json:"codex_client_name,omitempty"`
+	// ClaudeCompatEnabled enables Advanced Custom "Simulate Claude Code client"
+	// fingerprint headers/body on routes that target Claude Messages. Default
+	// false (no behavior change).
+	ClaudeCompatEnabled bool `json:"claude_compat_enabled,omitempty"`
 	// ReasoningEffortRulesEnabled enables per-model reasoning effort rules on this channel.
 	ReasoningEffortRulesEnabled bool `json:"reasoning_effort_rules_enabled,omitempty"`
 	// ReasoningEffortRules matches OriginModelName (client model or mapping source key).
