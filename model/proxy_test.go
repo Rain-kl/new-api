@@ -14,6 +14,19 @@ import (
 
 func setupProxyTestDB(t *testing.T) {
 	t.Helper()
+	// Save and restore the package-global DB handles: this fixture replaces
+	// model.DB/LOG_DB with a minimal in-memory DB (Proxy + Channel only), and
+	// tests running later in the same process rely on the full schema (users,
+	// logs, ...). Without the restore, they fail with "no such table: users".
+	previousDB, previousLogDB := DB, LOG_DB
+	previousMainDatabaseType, previousLogDatabaseType := common.MainDatabaseType(), common.LogDatabaseType()
+	previousRedisEnabled := common.RedisEnabled
+	t.Cleanup(func() {
+		DB, LOG_DB = previousDB, previousLogDB
+		common.SetDatabaseTypes(previousMainDatabaseType, previousLogDatabaseType)
+		common.RedisEnabled = previousRedisEnabled
+	})
+
 	dsn := fmt.Sprintf("file:proxy_%s?mode=memory&cache=shared", t.Name())
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
