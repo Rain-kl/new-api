@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 )
 
 type ChatToResponsesStreamEvent struct {
@@ -19,6 +20,8 @@ type ChatToResponsesStreamState struct {
 	Model   string
 	Created int64
 	Usage   *dto.Usage
+	// ToolBridge restores custom/tool_search/namespace tools on the Responses side.
+	ToolBridge *convmeta.CodexToolBridge
 
 	status            string
 	incompleteDetails *dto.IncompleteDetails
@@ -41,9 +44,11 @@ type chatToResponsesStreamTool struct {
 	ChatIndex   int
 	OutputIndex int
 	ID          string
-	Name        string
-	Arguments   strings.Builder
-	Done        bool
+	// CallID is the upstream tool call id (without fc_/ctc_ prefix).
+	CallID    string
+	Name      string
+	Arguments strings.Builder
+	Done      bool
 }
 
 type chatToResponsesOutputRef struct {
@@ -199,44 +204,48 @@ func (s *ChatToResponsesStreamState) appendToolCallDelta(toolCall dto.ToolCallRe
 	tool := s.toolsByIndex[chatIndex]
 	events := make([]ChatToResponsesStreamEvent, 0, 2)
 	if tool == nil {
+		callID := strings.TrimSpace(toolCall.ID)
+		if callID == "" {
+			callID = fmt.Sprintf("%s_call_%d", s.ID, chatIndex)
+		}
+		name := strings.TrimSpace(toolCall.Function.Name)
 		tool = &chatToResponsesStreamTool{
 			ChatIndex:   chatIndex,
 			OutputIndex: s.nextIndex("tool", chatIndex),
-			ID:          strings.TrimSpace(toolCall.ID),
-			Name:        strings.TrimSpace(toolCall.Function.Name),
-		}
-		if tool.ID == "" {
-			tool.ID = fmt.Sprintf("%s_call_%d", s.ID, chatIndex)
+			CallID:      callID,
+			ID:          responseToolCallItemID(callID, name, s.ToolBridge),
+			Name:        name,
 		}
 		s.toolsByIndex[chatIndex] = tool
+		item := chatFunctionToolCallToResponsesOutput(tool.CallID, tool.Name, "", "in_progress", s.ToolBridge)
+		item.ID = tool.ID
 		events = append(events, responsesStreamEvent(responsesEventOutputItemAdded, dto.ResponsesStreamResponse{
 			Type:        responsesEventOutputItemAdded,
 			OutputIndex: intPtr(tool.OutputIndex),
 			ItemID:      tool.ID,
-			Item: &dto.ResponsesOutput{
-				Type:      responsesOutputTypeFunctionCall,
-				ID:        tool.ID,
-				Status:    "in_progress",
-				CallId:    tool.ID,
-				Name:      tool.Name,
-				Arguments: []byte(`""`),
-			},
+			Item:        &item,
 		}))
 	}
 	if strings.TrimSpace(toolCall.ID) != "" {
-		tool.ID = strings.TrimSpace(toolCall.ID)
+		tool.CallID = strings.TrimSpace(toolCall.ID)
+		tool.ID = responseToolCallItemID(tool.CallID, tool.Name, s.ToolBridge)
 	}
 	if strings.TrimSpace(toolCall.Function.Name) != "" {
 		tool.Name = strings.TrimSpace(toolCall.Function.Name)
+		tool.ID = responseToolCallItemID(tool.CallID, tool.Name, s.ToolBridge)
 	}
 	if toolCall.Function.Arguments != "" {
 		tool.Arguments.WriteString(toolCall.Function.Arguments)
-		events = append(events, responsesStreamEvent(responsesEventFunctionArgsDelta, dto.ResponsesStreamResponse{
-			Type:        responsesEventFunctionArgsDelta,
-			OutputIndex: intPtr(tool.OutputIndex),
-			ItemID:      tool.ID,
-			Delta:       toolCall.Function.Arguments,
-		}))
+		// Custom freeform tools do not stream intermediate function argument
+		// deltas (cc-switch): input is emitted as a single delta on done.
+		if !s.ToolBridge.IsCustom(tool.Name) {
+			events = append(events, responsesStreamEvent(responsesEventFunctionArgsDelta, dto.ResponsesStreamResponse{
+				Type:        responsesEventFunctionArgsDelta,
+				OutputIndex: intPtr(tool.OutputIndex),
+				ItemID:      tool.ID,
+				Delta:       toolCall.Function.Arguments,
+			}))
+		}
 	}
 	return events, nil
 }
@@ -281,11 +290,31 @@ func (s *ChatToResponsesStreamState) doneDeltaEvents() []ChatToResponsesStreamEv
 			continue
 		}
 		tool.Done = true
-		events = append(events, responsesStreamEvent(responsesEventFunctionArgsDone, dto.ResponsesStreamResponse{
-			Type:        responsesEventFunctionArgsDone,
-			OutputIndex: intPtr(tool.OutputIndex),
-			ItemID:      tool.ID,
-		}))
+		arguments := tool.Arguments.String()
+		if s.ToolBridge.IsCustom(tool.Name) {
+			input := customToolInputFromChatArguments(arguments)
+			if input != "" {
+				events = append(events, responsesStreamEvent(responsesEventCustomToolInputDelta, dto.ResponsesStreamResponse{
+					Type:        responsesEventCustomToolInputDelta,
+					OutputIndex: intPtr(tool.OutputIndex),
+					ItemID:      tool.ID,
+					Delta:       input,
+				}))
+			}
+			events = append(events, responsesStreamEvent(responsesEventCustomToolInputDone, dto.ResponsesStreamResponse{
+				Type:        responsesEventCustomToolInputDone,
+				OutputIndex: intPtr(tool.OutputIndex),
+				ItemID:      tool.ID,
+				Input:       input,
+			}))
+		} else {
+			events = append(events, responsesStreamEvent(responsesEventFunctionArgsDone, dto.ResponsesStreamResponse{
+				Type:        responsesEventFunctionArgsDone,
+				OutputIndex: intPtr(tool.OutputIndex),
+				ItemID:      tool.ID,
+				Arguments:   arguments,
+			}))
+		}
 		events = append(events, responsesStreamEvent(responsesEventOutputItemDone, dto.ResponsesStreamResponse{
 			Type:        responsesEventOutputItemDone,
 			OutputIndex: intPtr(tool.OutputIndex),
@@ -406,12 +435,11 @@ func (s *ChatToResponsesStreamState) reasoningOutput(status string) *dto.Respons
 }
 
 func (s *ChatToResponsesStreamState) toolOutput(tool *chatToResponsesStreamTool, status string) *dto.ResponsesOutput {
-	return &dto.ResponsesOutput{
-		Type:      responsesOutputTypeFunctionCall,
-		ID:        tool.ID,
-		Status:    status,
-		CallId:    tool.ID,
-		Name:      tool.Name,
-		Arguments: chatArgumentsRawMessage(tool.Arguments.String()),
+	callID := tool.CallID
+	if callID == "" {
+		callID = tool.ID
 	}
+	out := chatFunctionToolCallToResponsesOutput(callID, tool.Name, tool.Arguments.String(), status, s.ToolBridge)
+	out.ID = tool.ID
+	return &out
 }

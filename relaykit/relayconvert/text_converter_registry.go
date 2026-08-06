@@ -216,7 +216,7 @@ var builtinTextConverters = []TextConverterSpec{
 		},
 	},
 	{
-		ID:      requestConverterResponsesToClaude,
+		ID:      ConverterOpenAIResponsesToClaudeMessages,
 		From:    types.RelayFormatOpenAIResponses,
 		To:      types.RelayFormatClaude,
 		Quality: TextConverterQualityFair,

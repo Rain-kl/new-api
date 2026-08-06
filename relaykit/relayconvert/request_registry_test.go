@@ -68,10 +68,11 @@ func TestRequestConverterRegistryListsSupportedTextConverters(t *testing.T) {
 			},
 		},
 		{
-			converter: requestConverterResponsesToClaude,
-			from:      types.RelayFormatOpenAIResponses,
-			to:        types.RelayFormatClaude,
-			quality:   RequestConverterQualityFair,
+			converter:      ConverterOpenAIResponsesToClaudeMessages,
+			from:           types.RelayFormatOpenAIResponses,
+			to:             types.RelayFormatClaude,
+			quality:        RequestConverterQualityFair,
+			advancedCustom: true,
 		},
 		{
 			converter:      ConverterOpenAIResponsesToGemini,
@@ -523,10 +524,10 @@ func TestConvertRequestResponsesToClaudeUsesDirectConverter(t *testing.T) {
 	require.NoError(t, err)
 	claudeReq, ok := result.Value.(*dto.ClaudeRequest)
 	require.True(t, ok)
-	assert.Equal(t, requestConverterResponsesToClaude, result.Converter)
+	assert.Equal(t, ConverterOpenAIResponsesToClaudeMessages, result.Converter)
 	assert.Equal(t, []RequestStep{
 		{
-			Converter: requestConverterResponsesToClaude,
+			Converter: ConverterOpenAIResponsesToClaudeMessages,
 			From:      types.RelayFormatOpenAIResponses,
 			To:        types.RelayFormatClaude,
 		},
@@ -540,9 +541,9 @@ func TestConvertRequestResponsesToClaudeUsesDirectConverter(t *testing.T) {
 	require.NotNil(t, claudeReq.Stream)
 	assert.True(t, *claudeReq.Stream)
 	assert.Equal(t, maxOutputTokens, *claudeReq.MaxTokens)
-	require.NotNil(t, claudeReq.Thinking)
-	assert.Equal(t, "enabled", claudeReq.Thinking.Type)
-	assert.Equal(t, 2048, claudeReq.Thinking.GetBudgetTokens())
+	// medium effort maps to 8192, but with max_tokens=512 the cap is 256 which is
+	// below Anthropic's 1024 thinking floor, so thinking is disabled (cc-switch).
+	assert.Nil(t, claudeReq.Thinking)
 
 	tools, err := kitutil.Any2Type[[]*dto.Tool](claudeReq.Tools)
 	require.NoError(t, err)

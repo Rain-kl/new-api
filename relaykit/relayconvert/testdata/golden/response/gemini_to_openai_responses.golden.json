@@ -24,7 +24,7 @@
     },
     {
       "type": "function_call",
-      "id": "call_<uuid>",
+      "id": "fc_call_<uuid>",
       "status": "completed",
       "role": "",
       "content": null,

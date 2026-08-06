@@ -33,6 +33,17 @@ func TestAdvancedCustomValidateResponsesToChatConverterPath(t *testing.T) {
 	}
 	require.NoError(t, validGemini.Validate())
 
+	validClaude := &AdvancedCustomConfig{
+		Routes: []AdvancedCustomRoute{
+			{
+				IncomingPath: "/v1/responses",
+				UpstreamPath: "/v1/messages",
+				Converter:    advancedCustomConverterOpenAIResponsesToClaudeMessages,
+			},
+		},
+	}
+	require.NoError(t, validClaude.Validate())
+
 	tests := []struct {
 		name         string
 		incomingPath string

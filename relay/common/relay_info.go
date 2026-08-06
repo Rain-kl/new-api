@@ -40,6 +40,9 @@ const (
 // host code and adaptors compiling unchanged.
 type ClaudeConvertInfo = convmeta.ClaudeConvertInfo
 
+// CodexToolBridge maps chat tool names back to Codex Responses identities.
+type CodexToolBridge = convmeta.CodexToolBridge
+
 type RerankerInfo struct {
 	Documents       []any
 	ReturnDocuments bool
@@ -189,6 +192,7 @@ type RelayInfo struct {
 	ThinkingContentInfo
 	TokenCountMeta
 	*ClaudeConvertInfo
+	*CodexToolBridge
 	*RerankerInfo
 	*ResponsesUsageInfo
 	*ChannelMeta
@@ -765,6 +769,16 @@ func (info *RelayInfo) EnsureClaudeConvertInfo() *convmeta.ClaudeConvertInfo {
 		}
 	}
 	return info.ClaudeConvertInfo
+}
+
+func (info *RelayInfo) EnsureCodexToolBridge() *convmeta.CodexToolBridge {
+	if info == nil {
+		return &convmeta.CodexToolBridge{}
+	}
+	if info.CodexToolBridge == nil {
+		info.CodexToolBridge = &CodexToolBridge{}
+	}
+	return info.CodexToolBridge
 }
 
 func (info *RelayInfo) GetSendResponseCount() int {

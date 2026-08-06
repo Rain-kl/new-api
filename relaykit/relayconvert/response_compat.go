@@ -84,6 +84,10 @@ func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id
 	return oaichat.ChatCompletionsResponseToResponsesResponse(resp, id)
 }
 
+func ChatCompletionsResponseToResponsesResponseWithBridge(resp *dto.OpenAITextResponse, id string, bridge *convmeta.CodexToolBridge) (*dto.OpenAIResponsesResponse, *dto.Usage, error) {
+	return oaichat.ChatCompletionsResponseToResponsesResponseWithBridge(resp, id, bridge)
+}
+
 func ResponsesStatusFromChatFinishReason(finishReason string) (string, *dto.IncompleteDetails) {
 	return oaichat.ResponsesStatusFromChatFinishReason(finishReason)
 }

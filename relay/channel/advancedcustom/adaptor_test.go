@@ -479,6 +479,12 @@ func TestAdaptorSelectsDuplicateResponsesRoutesByModel(t *testing.T) {
 				Converter:    relayconvert.ConverterOpenAIResponsesToGemini,
 				Models:       []string{"gemini-test"},
 			},
+			{
+				IncomingPath: "/v1/responses",
+				UpstreamPath: "/v1/messages",
+				Converter:    relayconvert.ConverterOpenAIResponsesToClaudeMessages,
+				Models:       []string{"claude-test"},
+			},
 		},
 	}
 
@@ -519,6 +525,31 @@ func TestAdaptorSelectsDuplicateResponsesRoutesByModel(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "/v1beta/models/gemini-test:streamGenerateContent", parsedURL.Path)
 	assert.Equal(t, "sse", parsedURL.Query().Get("alt"))
+
+	claudeAdaptor := &Adaptor{}
+	claudeInfo := advancedCustomRelayInfo(config)
+	claudeInfo.RelayFormat = types.RelayFormatOpenAIResponses
+	claudeInfo.RelayMode = relayconstant.RelayModeResponses
+	claudeInfo.RequestURLPath = "/v1/responses"
+	claudeInfo.OriginModelName = "claude-test"
+	claudeInfo.UpstreamModelName = "claude-test"
+	maxTokens := uint(256)
+	claudeConverted, err := claudeAdaptor.ConvertOpenAIResponsesRequest(advancedCustomGinContext("/v1/responses"), claudeInfo, dto.OpenAIResponsesRequest{
+		Model:           "claude-test",
+		MaxOutputTokens: &maxTokens,
+		Input:           mustAdvancedCustomRawMessage(t, "hello"),
+		Tools: mustAdvancedCustomRawMessage(t, []map[string]any{
+			{"type": "custom", "name": "apply_patch"},
+			{"type": "web_search"},
+		}),
+	})
+	require.NoError(t, err)
+	claudeReq, ok := claudeConverted.(*dto.ClaudeRequest)
+	require.True(t, ok)
+	require.NotEmpty(t, claudeReq.Tools)
+	claudeURL, err := claudeAdaptor.GetRequestURL(claudeInfo)
+	require.NoError(t, err)
+	assert.Contains(t, claudeURL, "/v1/messages")
 }
 
 func TestAdaptorResponsesToGeminiUsesResponsesBridge(t *testing.T) {

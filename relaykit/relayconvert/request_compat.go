@@ -39,6 +39,10 @@ func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (
 	return oairesponses.ResponsesRequestToChatCompletionsRequest(req)
 }
 
+func ResponsesRequestToChatCompletionsRequestWithMeta(req *dto.OpenAIResponsesRequest, info convmeta.Meta) (*dto.GeneralOpenAIRequest, error) {
+	return oairesponses.ResponsesRequestToChatCompletionsRequestWithMeta(req, info)
+}
+
 func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Meta, req *dto.OpenAIResponsesRequest) (*dto.ClaudeRequest, error) {
 	return oairesponses.OpenAIResponsesRequestToClaudeMessages(c, info, req)
 }

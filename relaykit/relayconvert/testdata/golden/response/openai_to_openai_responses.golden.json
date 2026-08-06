@@ -39,7 +39,7 @@
     },
     {
       "type": "function_call",
-      "id": "call_abc",
+      "id": "fc_call_abc",
       "status": "completed",
       "role": "",
       "content": null,

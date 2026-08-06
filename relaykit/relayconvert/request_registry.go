@@ -68,18 +68,18 @@ const (
 	requestConverterClaudeToResponses = "claude_messages_to_openai_responses"
 	requestConverterGeminiToClaude    = "gemini_generate_content_to_claude_messages"
 	requestConverterGeminiToResponses = "gemini_generate_content_to_openai_responses"
-	requestConverterResponsesToClaude = "openai_responses_to_claude_messages"
 )
 
 const (
-	ConverterNone                        = "none"
-	ConverterClaudeMessagesToOpenAIChat  = "anthropic_messages_to_openai_chat_completions"
-	ConverterOpenAIChatToClaudeMessages  = "openai_chat_completions_to_anthropic_messages"
-	ConverterOpenAIChatToOpenAIResponses = "openai_chat_completions_to_openai_responses"
-	ConverterOpenAIResponsesToOpenAIChat = "openai_responses_to_openai_chat_completions"
-	ConverterOpenAIResponsesToGemini     = "openai_responses_to_gemini_generate_content"
-	ConverterGeminiContentToOpenAIChat   = "gemini_generate_content_to_openai_chat_completions"
-	ConverterOpenAIChatToGeminiContent   = "openai_chat_completions_to_gemini_generate_content"
+	ConverterNone                               = "none"
+	ConverterClaudeMessagesToOpenAIChat         = "anthropic_messages_to_openai_chat_completions"
+	ConverterOpenAIChatToClaudeMessages         = "openai_chat_completions_to_anthropic_messages"
+	ConverterOpenAIChatToOpenAIResponses        = "openai_chat_completions_to_openai_responses"
+	ConverterOpenAIResponsesToOpenAIChat        = "openai_responses_to_openai_chat_completions"
+	ConverterOpenAIResponsesToClaudeMessages    = "openai_responses_to_claude_messages"
+	ConverterOpenAIResponsesToGemini            = "openai_responses_to_gemini_generate_content"
+	ConverterGeminiContentToOpenAIChat          = "gemini_generate_content_to_openai_chat_completions"
+	ConverterOpenAIChatToGeminiContent          = "openai_chat_completions_to_gemini_generate_content"
 )
 
 func registerBuiltinRequestConverter(spec RequestConverterSpec) {
@@ -485,7 +485,7 @@ func convertOpenAIResponsesRequestToGeminiChat(c context.Context, info convmeta.
 	return oairesponses.OpenAIResponsesRequestToGeminiChat(c, &prepared, info)
 }
 
-func convertResponsesRequestToChat(_ context.Context, _ convmeta.Meta, request any) (any, error) {
+func convertResponsesRequestToChat(_ context.Context, info convmeta.Meta, request any) (any, error) {
 	responsesRequest, ok := request.(*dto.OpenAIResponsesRequest)
 	if !ok {
 		if value, ok := request.(dto.OpenAIResponsesRequest); ok {
@@ -495,5 +495,5 @@ func convertResponsesRequestToChat(_ context.Context, _ convmeta.Meta, request a
 	if responsesRequest == nil {
 		return nil, fmt.Errorf("expected OpenAI responses request, got %T", request)
 	}
-	return oairesponses.ResponsesRequestToChatCompletionsRequest(responsesRequest)
+	return oairesponses.ResponsesRequestToChatCompletionsRequestWithMeta(responsesRequest, info)
 }

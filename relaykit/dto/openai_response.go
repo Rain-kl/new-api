@@ -336,6 +336,12 @@ type ResponsesOutput struct {
 	CallId    string                   `json:"call_id,omitempty"`
 	Name      string                   `json:"name,omitempty"`
 	Arguments json.RawMessage          `json:"arguments,omitempty"`
+	// Input is the freeform payload for custom_tool_call items (Codex apply_patch, etc.).
+	Input any `json:"input,omitempty"`
+	// Namespace restores namespaced function_call tools loaded via tool_search.
+	Namespace string `json:"namespace,omitempty"`
+	// Execution is set on client-side tool_search_call items.
+	Execution string `json:"execution,omitempty"`
 }
 
 // ArgumentsString returns function call arguments in the string form expected by Chat Completions.
@@ -390,11 +396,16 @@ type ResponsesStreamResponse struct {
 	Item     *ResponsesOutput         `json:"item,omitempty"`
 	// - response.function_call_arguments.delta
 	// - response.function_call_arguments.done
+	// - response.custom_tool_call_input.done carries Input
 	OutputIndex  *int                           `json:"output_index,omitempty"`
 	ContentIndex *int                           `json:"content_index,omitempty"`
 	SummaryIndex *int                           `json:"summary_index,omitempty"`
 	ItemID       string                         `json:"item_id,omitempty"`
 	Part         *ResponsesReasoningSummaryPart `json:"part,omitempty"`
+	// Input is set on response.custom_tool_call_input.done.
+	Input string `json:"input,omitempty"`
+	// Arguments is set on response.function_call_arguments.done when available.
+	Arguments string `json:"arguments,omitempty"`
 }
 
 // GetOpenAIError 从动态错误类型中提取OpenAIError结构

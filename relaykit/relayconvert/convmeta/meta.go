@@ -36,6 +36,13 @@ type Meta interface {
 	// nil receiver may return a temporary initialized state.
 	EnsureClaudeConvertInfo() *ClaudeConvertInfo
 
+	// EnsureCodexToolBridge lazily creates and returns the mutable Codex tool
+	// name bridge used to restore custom/tool_search/namespace tools when
+	// Chat/Claude responses are converted back to OpenAI Responses. For
+	// non-nil receivers, the same instance must be returned for the lifetime
+	// of one request; a nil receiver may return a temporary empty bridge.
+	EnsureCodexToolBridge() *CodexToolBridge
+
 	// GetSendResponseCount / IncrSendResponseCount expose the shared
 	// downstream-chunk counter (the host may also increment it).
 	GetSendResponseCount() int
@@ -82,6 +89,7 @@ type Values struct {
 	EstimatePromptTokens int
 
 	ClaudeConvertInfo *ClaudeConvertInfo
+	CodexToolBridge   *CodexToolBridge
 	SendResponseCount int
 	ConversionChain   []types.RelayFormat
 
@@ -154,6 +162,27 @@ func (v *Values) EnsureClaudeConvertInfo() *ClaudeConvertInfo {
 		v.ClaudeConvertInfo = &ClaudeConvertInfo{LastMessagesType: LastMessageTypeNone}
 	}
 	return v.ClaudeConvertInfo
+}
+
+func (v *Values) EnsureCodexToolBridge() *CodexToolBridge {
+	if v == nil {
+		return &CodexToolBridge{}
+	}
+	if v.CodexToolBridge == nil {
+		v.CodexToolBridge = &CodexToolBridge{}
+	}
+	return v.CodexToolBridge
+}
+
+// CodexToolBridgeOf returns m's tool bridge when present, otherwise nil.
+// Unlike EnsureCodexToolBridge it does not create an empty bridge.
+func CodexToolBridgeOf(m Meta) *CodexToolBridge {
+	if m == nil {
+		return nil
+	}
+	// Ensure always returns a non-nil value; callers that only want a populated
+	// bridge should check Lookup results, not nil-ness of the bridge pointer.
+	return m.EnsureCodexToolBridge()
 }
 
 func (v *Values) GetSendResponseCount() int {

@@ -24,7 +24,7 @@
     },
     {
       "type": "function_call",
-      "id": "toolu_abc",
+      "id": "fc_toolu_abc",
       "status": "completed",
       "role": "",
       "content": null,

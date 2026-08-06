@@ -1,12 +1,14 @@
 package oaichat
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 )
 
@@ -22,16 +24,28 @@ const (
 	responsesEventOutputItemDone           = "response.output_item.done"
 	responsesEventFunctionArgsDelta        = "response.function_call_arguments.delta"
 	responsesEventFunctionArgsDone         = "response.function_call_arguments.done"
+	responsesEventCustomToolInputDelta     = "response.custom_tool_call_input.delta"
+	responsesEventCustomToolInputDone      = "response.custom_tool_call_input.done"
 	responsesEventReasoningSummaryDelta    = "response.reasoning_summary_text.delta"
 	responsesEventReasoningSummaryDone     = "response.reasoning_summary_text.done"
 	responsesOutputTypeFunctionCall        = "function_call"
+	responsesOutputTypeCustomToolCall      = "custom_tool_call"
+	responsesOutputTypeToolSearchCall      = "tool_search_call"
 	responsesOutputTypeMessage             = "message"
 	responsesOutputTypeReasoning           = "reasoning"
 	responsesIncompleteReasonContentFilter = "content_filter"
 	responsesIncompleteReasonMaxTokens     = "max_output_tokens"
+
+	customToolInputField = "input"
 )
 
 func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id string) (*dto.OpenAIResponsesResponse, *dto.Usage, error) {
+	return ChatCompletionsResponseToResponsesResponseWithBridge(resp, id, nil)
+}
+
+// ChatCompletionsResponseToResponsesResponseWithBridge restores Codex tool
+// shapes using the request-side tool bridge when present.
+func ChatCompletionsResponseToResponsesResponseWithBridge(resp *dto.OpenAITextResponse, id string, bridge *convmeta.CodexToolBridge) (*dto.OpenAIResponsesResponse, *dto.Usage, error) {
 	if resp == nil {
 		return nil, nil, errors.New("response is nil")
 	}
@@ -87,7 +101,7 @@ func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id
 	}
 
 	for i, toolCall := range choice.Message.ParseToolCalls() {
-		toolOutput, err := chatToolCallToResponsesOutput(toolCall, id, i, responseOutputStatus(out))
+		toolOutput, err := chatToolCallToResponsesOutput(toolCall, id, i, responseOutputStatus(out), bridge)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -169,28 +183,126 @@ func responseStatusString(resp *dto.OpenAIResponsesResponse) string {
 	return strings.TrimSpace(status)
 }
 
-func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID string, index int, status string) (dto.ResponsesOutput, error) {
+func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID string, index int, status string, bridge *convmeta.CodexToolBridge) (dto.ResponsesOutput, error) {
 	callID := strings.TrimSpace(toolCall.ID)
 	if callID == "" {
 		callID = fmt.Sprintf("%s_call_%d", responseID, index)
 	}
-	if toolCall.Type == "" || toolCall.Type == "function" {
+	chatName := strings.TrimSpace(toolCall.Function.Name)
+	if toolCall.Type != "" && toolCall.Type != "function" {
 		return dto.ResponsesOutput{
-			Type:      responsesOutputTypeFunctionCall,
+			Type:      toolCall.Type,
 			ID:        callID,
 			Status:    status,
 			CallId:    callID,
-			Name:      toolCall.Function.Name,
-			Arguments: chatArgumentsRawMessage(toolCall.Function.Arguments),
+			Arguments: toolCall.Custom,
 		}, nil
 	}
+	return chatFunctionToolCallToResponsesOutput(callID, chatName, toolCall.Function.Arguments, status, bridge), nil
+}
+
+func chatFunctionToolCallToResponsesOutput(callID, chatName, arguments, status string, bridge *convmeta.CodexToolBridge) dto.ResponsesOutput {
+	itemID := responseToolCallItemID(callID, chatName, bridge)
+	if bridge != nil {
+		if spec, ok := bridge.Lookup(chatName); ok {
+			switch spec.Kind {
+			case convmeta.CodexToolKindToolSearch:
+				return dto.ResponsesOutput{
+					Type:      responsesOutputTypeToolSearchCall,
+					ID:        itemID,
+					Status:    status,
+					CallId:    callID,
+					Execution: "client",
+					Arguments: chatToolSearchArgumentsRaw(arguments),
+				}
+			case convmeta.CodexToolKindCustom:
+				return dto.ResponsesOutput{
+					Type:   responsesOutputTypeCustomToolCall,
+					ID:     itemID,
+					Status: status,
+					CallId: callID,
+					Name:   firstNonEmpty(spec.Name, chatName),
+					Input:  customToolInputFromChatArguments(arguments),
+				}
+			case convmeta.CodexToolKindNamespace:
+				return dto.ResponsesOutput{
+					Type:      responsesOutputTypeFunctionCall,
+					ID:        itemID,
+					Status:    status,
+					CallId:    callID,
+					Name:      firstNonEmpty(spec.Name, chatName),
+					Namespace: spec.Namespace,
+					Arguments: chatArgumentsRawMessage(arguments),
+				}
+			case convmeta.CodexToolKindFunction:
+				return dto.ResponsesOutput{
+					Type:      responsesOutputTypeFunctionCall,
+					ID:        itemID,
+					Status:    status,
+					CallId:    callID,
+					Name:      firstNonEmpty(spec.Name, chatName),
+					Arguments: chatArgumentsRawMessage(arguments),
+				}
+			}
+		}
+	}
 	return dto.ResponsesOutput{
-		Type:      toolCall.Type,
-		ID:        callID,
+		Type:      responsesOutputTypeFunctionCall,
+		ID:        itemID,
 		Status:    status,
 		CallId:    callID,
-		Arguments: toolCall.Custom,
-	}, nil
+		Name:      chatName,
+		Arguments: chatArgumentsRawMessage(arguments),
+	}
+}
+
+func responseToolCallItemID(callID, chatName string, bridge *convmeta.CodexToolBridge) string {
+	if bridge != nil && bridge.IsCustom(chatName) {
+		return "ctc_" + callID
+	}
+	return "fc_" + callID
+}
+
+func customToolInputFromChatArguments(arguments string) string {
+	arguments = strings.TrimSpace(arguments)
+	if arguments == "" {
+		return ""
+	}
+	var object map[string]any
+	if err := kitutil.Unmarshal([]byte(arguments), &object); err == nil {
+		if input, ok := object[customToolInputField]; ok {
+			return kitutil.Interface2String(input)
+		}
+	}
+	return arguments
+}
+
+func chatToolSearchArgumentsRaw(arguments string) json.RawMessage {
+	arguments = strings.TrimSpace(arguments)
+	if arguments == "" {
+		return []byte(`{}`)
+	}
+	var object map[string]any
+	if err := kitutil.Unmarshal([]byte(arguments), &object); err == nil {
+		raw, err := kitutil.Marshal(object)
+		if err == nil {
+			return raw
+		}
+	}
+	raw, err := kitutil.Marshal(map[string]any{"query": arguments})
+	if err != nil {
+		return []byte(`{}`)
+	}
+	return raw
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func chatArgumentsRawMessage(arguments string) []byte {

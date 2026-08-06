@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,8 +38,105 @@ func TestChatCompletionsResponseToResponsesPreservesTextToolCallsAndUsage(t *tes
 	assert.Equal(t, "I will call.", resp.Output[0].Content[0].Text)
 	assert.Equal(t, responsesOutputTypeFunctionCall, resp.Output[1].Type)
 	assert.Equal(t, "call_1", resp.Output[1].CallId)
+	assert.Equal(t, "fc_call_1", resp.Output[1].ID)
 	assert.Equal(t, "lookup", resp.Output[1].Name)
 	assert.Equal(t, `"{\"q\":\"x\"}"`, string(resp.Output[1].Arguments))
+}
+
+func TestChatCompletionsResponseToResponsesRestoresCodexToolShapes(t *testing.T) {
+	bridge := &convmeta.CodexToolBridge{}
+	bridge.Set("apply_patch", convmeta.CodexToolSpec{Kind: convmeta.CodexToolKindCustom, Name: "apply_patch"})
+	bridge.Set("tool_search", convmeta.CodexToolSpec{Kind: convmeta.CodexToolKindToolSearch, Name: "tool_search"})
+	bridge.Set("mcp__codex_apps__gmail___search_emails", convmeta.CodexToolSpec{
+		Kind:      convmeta.CodexToolKindNamespace,
+		Name:      "_search_emails",
+		Namespace: "mcp__codex_apps__gmail",
+	})
+
+	msg := dto.Message{Role: "assistant"}
+	msg.SetToolCalls([]dto.ToolCallRequest{
+		{ID: "call_patch", Type: "function", Function: dto.FunctionRequest{Name: "apply_patch", Arguments: `{"input":"*** Begin Patch\n*** End Patch"}`}},
+		{ID: "call_search", Type: "function", Function: dto.FunctionRequest{Name: "tool_search", Arguments: `{"query":"Gmail","limit":5}`}},
+		{ID: "call_ns", Type: "function", Function: dto.FunctionRequest{Name: "mcp__codex_apps__gmail___search_emails", Arguments: `{"query":"unread"}`}},
+	})
+	chat := &dto.OpenAITextResponse{
+		Model: "gpt-test",
+		Choices: []dto.OpenAITextResponseChoice{
+			{Message: msg, FinishReason: "tool_calls"},
+		},
+	}
+
+	resp, _, err := ChatCompletionsResponseToResponsesResponseWithBridge(chat, "resp_1", bridge)
+	require.NoError(t, err)
+	require.Len(t, resp.Output, 3)
+
+	assert.Equal(t, responsesOutputTypeCustomToolCall, resp.Output[0].Type)
+	assert.Equal(t, "ctc_call_patch", resp.Output[0].ID)
+	assert.Equal(t, "call_patch", resp.Output[0].CallId)
+	assert.Equal(t, "apply_patch", resp.Output[0].Name)
+	assert.Equal(t, "*** Begin Patch\n*** End Patch", resp.Output[0].Input)
+
+	assert.Equal(t, responsesOutputTypeToolSearchCall, resp.Output[1].Type)
+	assert.Equal(t, "call_search", resp.Output[1].CallId)
+	assert.Equal(t, "client", resp.Output[1].Execution)
+	assert.JSONEq(t, `{"query":"Gmail","limit":5}`, string(resp.Output[1].Arguments))
+
+	assert.Equal(t, responsesOutputTypeFunctionCall, resp.Output[2].Type)
+	assert.Equal(t, "_search_emails", resp.Output[2].Name)
+	assert.Equal(t, "mcp__codex_apps__gmail", resp.Output[2].Namespace)
+	assert.Equal(t, `"{\"query\":\"unread\"}"`, string(resp.Output[2].Arguments))
+}
+
+func TestChatCompletionsStreamToResponsesRestoresCustomToolInputEvents(t *testing.T) {
+	state := NewChatToResponsesStreamState("resp_1", "gpt-test")
+	state.ToolBridge = &convmeta.CodexToolBridge{}
+	state.ToolBridge.Set("apply_patch", convmeta.CodexToolSpec{Kind: convmeta.CodexToolKindCustom, Name: "apply_patch"})
+	toolIndex := 0
+
+	var events []ChatToResponsesStreamEvent
+	events = append(events, mustResponsesEventsFromChatChunk(t, state, &dto.ChatCompletionsStreamResponse{
+		Choices: []dto.ChatCompletionsStreamResponseChoice{
+			{Index: 0, Delta: dto.ChatCompletionsStreamResponseChoiceDelta{ToolCalls: []dto.ToolCallResponse{
+				{Index: &toolIndex, ID: "call_patch", Type: "function", Function: dto.FunctionResponse{Name: "apply_patch"}},
+			}}},
+		},
+	})...)
+	events = append(events, mustResponsesEventsFromChatChunk(t, state, &dto.ChatCompletionsStreamResponse{
+		Choices: []dto.ChatCompletionsStreamResponseChoice{
+			{Index: 0, Delta: dto.ChatCompletionsStreamResponseChoiceDelta{ToolCalls: []dto.ToolCallResponse{
+				{Index: &toolIndex, Function: dto.FunctionResponse{Arguments: `{"input":"patch body"}`}},
+			}}},
+		},
+	})...)
+	finishReason := "tool_calls"
+	events = append(events, mustResponsesEventsFromChatChunk(t, state, &dto.ChatCompletionsStreamResponse{
+		Choices: []dto.ChatCompletionsStreamResponseChoice{
+			{Index: 0, FinishReason: &finishReason},
+		},
+	})...)
+	events = append(events, FinalizeChatCompletionsStreamToResponses(state)...)
+
+	var sawItemAdded, sawInputDelta, sawInputDone bool
+	for _, event := range events {
+		switch event.Type {
+		case responsesEventOutputItemAdded:
+			require.NotNil(t, event.Payload.Item)
+			assert.Equal(t, responsesOutputTypeCustomToolCall, event.Payload.Item.Type)
+			assert.Equal(t, "ctc_call_patch", event.Payload.Item.ID)
+			sawItemAdded = true
+		case responsesEventCustomToolInputDelta:
+			assert.Equal(t, "patch body", event.Payload.Delta)
+			sawInputDelta = true
+		case responsesEventCustomToolInputDone:
+			assert.Equal(t, "patch body", event.Payload.Input)
+			sawInputDone = true
+		case responsesEventFunctionArgsDelta:
+			t.Fatalf("custom tools must not emit function_call_arguments.delta")
+		}
+	}
+	assert.True(t, sawItemAdded)
+	assert.True(t, sawInputDelta)
+	assert.True(t, sawInputDone)
 }
 
 func TestChatCompletionsResponseToResponsesMapsIncompleteFinishReasons(t *testing.T) {
