@@ -146,6 +146,9 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		if !ok {
 			return nil, fmt.Errorf("expected OpenAI chat completions request, got %T", result.Value)
 		}
+		// Remap unsupported roles (e.g. developer) so Responses->Chat conversions
+		// keep roles accepted by strict OpenAI-compatible upstreams.
+		info.ChannelSetting.ApplyMessagesRoleCompatibility(chatRequest.Messages)
 		return a.convertOpenAICompatibleRequest(c, info, chatRequest)
 	case relayconvert.ConverterOpenAIResponsesToClaudeMessages:
 		result, err := service.ConvertRequestByID(c, info, converter, request)

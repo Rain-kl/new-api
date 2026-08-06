@@ -1071,3 +1071,49 @@ func mustAdvancedCustomRawMessage(t *testing.T, value any) []byte {
 	require.NoError(t, err)
 	return raw
 }
+
+func TestAdaptorResponsesToChatAppliesRoleCompatibility(t *testing.T) {
+	responsesInput := mustAdvancedCustomRawMessage(t, []map[string]any{
+		{"role": "developer", "content": "be helpful"},
+	})
+
+	convert := func(t *testing.T, compat bool) *dto.GeneralOpenAIRequest {
+		t.Helper()
+		adaptor := &Adaptor{}
+		info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+			Routes: []dto.AdvancedCustomRoute{
+				{
+					IncomingPath: "/v1/responses",
+					UpstreamPath: "/v1/chat/completions",
+					Converter:    relayconvert.ConverterOpenAIResponsesToOpenAIChat,
+				},
+			},
+		})
+		info.RelayFormat = types.RelayFormatOpenAIResponses
+		info.RelayMode = relayconstant.RelayModeResponses
+		info.RequestURLPath = "/v1/responses"
+		info.ChannelSetting.MessagesRoleCompatibilityEnabled = compat
+
+		out, err := adaptor.ConvertOpenAIResponsesRequest(
+			advancedCustomGinContext("/v1/responses"),
+			info,
+			dto.OpenAIResponsesRequest{Model: "gpt-test", Input: responsesInput},
+		)
+		require.NoError(t, err)
+		chatReq, ok := out.(*dto.GeneralOpenAIRequest)
+		require.True(t, ok)
+		return chatReq
+	}
+
+	t.Run("enabled remaps developer to fallback", func(t *testing.T) {
+		chatReq := convert(t, true)
+		require.NotEmpty(t, chatReq.Messages)
+		assert.Equal(t, "system", chatReq.Messages[0].Role)
+	})
+
+	t.Run("disabled preserves developer", func(t *testing.T) {
+		chatReq := convert(t, false)
+		require.NotEmpty(t, chatReq.Messages)
+		assert.Equal(t, "developer", chatReq.Messages[0].Role)
+	})
+}
