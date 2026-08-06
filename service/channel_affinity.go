@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/pkg/cachex"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -534,6 +535,14 @@ func ApplyChannelAffinityOverrideTemplate(c *gin.Context, paramOverride map[stri
 	if c == nil {
 		return paramOverride, false
 	}
+	// Model-redirect requests are affinity-only: selection sets the affinity meta
+	// for reuse of the cache/binding, but the rule's param_override_template must
+	// not be injected into a redirect hop (unplanned side effect, e.g. the
+	// default "codex cli trace" rule applying its pass-header template to a
+	// redirect whose virtual model matches ^gpt-.*$).
+	if common.GetContextKeyBool(c, constant.ContextKeyModelRedirectActive) {
+		return paramOverride, false
+	}
 	meta, ok := getChannelAffinityMeta(c)
 	if !ok {
 		return paramOverride, false
@@ -639,6 +648,16 @@ func ShouldSkipRetryAfterChannelAffinityFailure(c *gin.Context) bool {
 		return false
 	}
 	return meta.SkipRetry
+}
+
+// ClearChannelAffinitySkipRetry forces the affinity skip-retry flag off for the
+// request. Model-redirect uses this so a matched rule's SkipRetryOnFailure cannot
+// suppress same-priority pool retries (redirect HA is preserved).
+func ClearChannelAffinitySkipRetry(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	c.Set(ginKeyChannelAffinitySkipRetry, false)
 }
 
 func ClearCurrentChannelAffinityCache(c *gin.Context) bool {

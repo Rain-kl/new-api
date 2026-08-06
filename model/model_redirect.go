@@ -313,6 +313,49 @@ func OrderRedirectCandidates(cands []RedirectCandidate) []RedirectCandidate {
 	return orderRedirectCandidates(cands)
 }
 
+// OrderRedirectCandidatesWithAffinity promotes the bound channel to the front of
+// each contiguous equal-priority run that contains it; runs without it keep the
+// existing equal-share shuffle. preferredChannelID <= 0 behaves exactly like
+// OrderRedirectCandidates. Promotion is stable: the preferred channel moves to
+// the front of its run and the other members keep relative order (no re-shuffle).
+func OrderRedirectCandidatesWithAffinity(cands []RedirectCandidate, preferredChannelID int) []RedirectCandidate {
+	if preferredChannelID <= 0 {
+		return orderRedirectCandidates(cands)
+	}
+	if len(cands) == 0 {
+		return nil
+	}
+	// Work on a copy so callers can safely pass cache-backed or shared slices.
+	work := make([]RedirectCandidate, len(cands))
+	copy(work, cands)
+
+	// Same run-boundary walk as orderRedirectCandidates; promote within the run.
+	i := 0
+	for i < len(work) {
+		j := i + 1
+		for j < len(work) && work[j].Priority == work[i].Priority {
+			j++
+		}
+		run := work[i:j]
+		idx := -1
+		for k := range run {
+			if run[k].ChannelID == preferredChannelID {
+				idx = k
+				break
+			}
+		}
+		if idx >= 0 {
+			preferred := run[idx]
+			copy(run[1:idx+1], run[0:idx])
+			run[0] = preferred
+		} else {
+			shuffleRedirectCandidatesEqual(run)
+		}
+		i = j
+	}
+	return work
+}
+
 // orderRedirectCandidates preserves input order and shuffles only contiguous
 // equal-Priority runs. It does not regroup non-contiguous same priorities or
 // re-sort by priority globally (required so nested expand black-box order sticks).

@@ -56,12 +56,38 @@ func tryModelRedirectSelection(
 	)
 	// Skip hops temporarily disabled after recent failures (1m * fails, max 30m).
 	filtered = model.FilterRedirectCooldownDown(filtered, clientModel)
+	// Personal model-redirect channel affinity: reuse the global
+	// channel_affinity_setting rules. The rule's model_regex matches the virtual
+	// model name; the bound channel is promoted within its same-priority pool.
+	preferredID, _ := service.GetPreferredChannelByAffinity(c, clientModel, effectiveGroup)
+	if preferredID > 0 {
+		// Drop a stale binding when the bound channel is disabled. Cooldown-only
+		// exclusions keep the channel enabled and must not clear the binding.
+		preferred, chErr := model.CacheGetChannel(preferredID)
+		if chErr != nil || preferred == nil {
+			preferred, chErr = model.GetChannelById(preferredID, true)
+		}
+		if chErr == nil && preferred != nil && preferred.Status != common.ChannelStatusEnabled {
+			if !service.ShouldKeepChannelAffinityOnChannelDisabled() {
+				service.ClearCurrentChannelAffinityCache(c)
+			}
+			preferredID = 0
+		}
+	}
 	if len(filtered) == 0 {
 		abortWithRelayMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": clientModel}), types.ErrorCodeModelNotFound)
 		return nil, "", "", true, true
 	}
-	// LB among reachable peers only (after path/channel/cooldown filter).
-	filtered = model.OrderRedirectCandidates(filtered)
+	// LB among reachable peers only (after path/channel/cooldown filter), with the
+	// bound channel promoted within its equal-priority run.
+	filtered = model.OrderRedirectCandidatesWithAffinity(filtered, preferredID)
+	if preferredID > 0 && len(filtered) > 0 && filtered[0].ChannelID == preferredID {
+		service.MarkChannelAffinityUsed(c, effectiveGroup, preferredID)
+	}
+	// Redirect HA must never be suppressed by a rule's SkipRetryOnFailure: retries
+	// keep walking the same-priority pool, then lower priorities. Cleared last
+	// because MarkChannelAffinityUsed re-applies the rule's meta.SkipRetry.
+	service.ClearChannelAffinitySkipRetry(c)
 	common.SetContextKey(c, constant.ContextKeyModelRedirectActive, true)
 	common.SetContextKey(c, constant.ContextKeyModelRedirectClientModel, clientModel)
 	common.SetContextKey(c, constant.ContextKeyModelRedirectCandidates, filtered)

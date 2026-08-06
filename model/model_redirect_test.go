@@ -439,3 +439,90 @@ func TestValidateModelRedirectInput_Cycle(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, strings.ToLower(err.Error()), "cycle")
 }
+
+func TestOrderRedirectCandidatesWithAffinity_PromotesPreferredInSamePriorityRun(t *testing.T) {
+	cands := []RedirectCandidate{
+		{ChannelID: 1, Model: "a", Priority: 10},
+		{ChannelID: 2, Model: "b", Priority: 10},
+		{ChannelID: 3, Model: "c", Priority: 5},
+	}
+	out := OrderRedirectCandidatesWithAffinity(cands, 2)
+	require.Len(t, out, 3)
+	require.Equal(t, 2, out[0].ChannelID, "preferred channel must be promoted to front of its run")
+	require.Equal(t, 3, out[2].ChannelID, "lower priority run must stay last")
+	require.ElementsMatch(t, []int{1, 2}, []int{out[0].ChannelID, out[1].ChannelID})
+}
+
+func TestOrderRedirectCandidatesWithAffinity_StablePromotion(t *testing.T) {
+	cands := []RedirectCandidate{
+		{ChannelID: 1, Priority: 10},
+		{ChannelID: 2, Priority: 10},
+		{ChannelID: 3, Priority: 10},
+	}
+	out := OrderRedirectCandidatesWithAffinity(cands, 3)
+	require.Len(t, out, 3)
+	require.Equal(t, 3, out[0].ChannelID)
+	require.Equal(t, 1, out[1].ChannelID, "remaining run members keep relative order")
+	require.Equal(t, 2, out[2].ChannelID)
+}
+
+func TestOrderRedirectCandidatesWithAffinity_PreferredNotInPool(t *testing.T) {
+	cands := []RedirectCandidate{
+		{ChannelID: 1, Priority: 10},
+		{ChannelID: 2, Priority: 10},
+		{ChannelID: 3, Priority: 5},
+	}
+	out := OrderRedirectCandidatesWithAffinity(cands, 99)
+	require.Len(t, out, 3)
+	require.Equal(t, 3, out[2].ChannelID)
+	require.ElementsMatch(t, []int{1, 2}, []int{out[0].ChannelID, out[1].ChannelID})
+}
+
+func TestOrderRedirectCandidatesWithAffinity_OnlySamePriorityRun(t *testing.T) {
+	// Black-box expand order [1(P50), 2(P40), 9(P100)] must stick even when the
+	// preferred channel sits in a different priority run.
+	cands := []RedirectCandidate{
+		{ChannelID: 1, Priority: 50},
+		{ChannelID: 2, Priority: 40},
+		{ChannelID: 9, Priority: 100},
+	}
+	out := OrderRedirectCandidatesWithAffinity(cands, 2)
+	require.Equal(t, []int{1, 2, 9}, []int{out[0].ChannelID, out[1].ChannelID, out[2].ChannelID})
+}
+
+func TestOrderRedirectCandidatesWithAffinity_ZeroPreferredMatchesLegacy(t *testing.T) {
+	// Multi-element equal-priority run: preferredChannelID <= 0 must delegate to
+	// orderRedirectCandidates, which shuffles the run in place while keeping run
+	// boundaries and the lower-priority run last. Assert the permutation and run
+	// structure rather than an exact order (the shuffle is random), and run enough
+	// iterations that both equal-priority members lead sometimes, proving the
+	// legacy load-balance path actually ran.
+	cands := []RedirectCandidate{
+		{ChannelID: 1, Priority: 10},
+		{ChannelID: 2, Priority: 10},
+		{ChannelID: 3, Priority: 5},
+	}
+	firstA, firstB := 0, 0
+	for i := 0; i < 80; i++ {
+		out := OrderRedirectCandidatesWithAffinity(cands, 0)
+		require.Len(t, out, 3)
+		require.Equal(t, 3, out[2].ChannelID, "lower-priority run must stay last")
+		require.ElementsMatch(t, []int{1, 2}, []int{out[0].ChannelID, out[1].ChannelID},
+			"equal-priority run must contain exactly its input members")
+		switch out[0].ChannelID {
+		case 1:
+			firstA++
+		case 2:
+			firstB++
+		default:
+			require.Failf(t, "unexpected first candidate", "channel id %d", out[0].ChannelID)
+		}
+	}
+	require.True(t, firstA > 0, "legacy equal-share shuffle must let channel 1 lead sometimes")
+	require.True(t, firstB > 0, "legacy equal-share shuffle must let channel 2 lead sometimes")
+}
+
+func TestOrderRedirectCandidatesWithAffinity_Empty(t *testing.T) {
+	require.Nil(t, OrderRedirectCandidatesWithAffinity(nil, 7))
+	require.Nil(t, OrderRedirectCandidatesWithAffinity([]RedirectCandidate{}, 7))
+}
