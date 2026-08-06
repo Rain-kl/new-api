@@ -44,10 +44,6 @@ type ChannelSettings struct {
 	// CodexClientName is the synthetic originator / UA client segment.
 	// Empty defaults to DefaultCodexClientName at runtime.
 	CodexClientName string `json:"codex_client_name,omitempty"`
-	// CodexIdentityMode controls identity header policy: auto|passthrough|synthesize.
-	// Empty is treated as auto.
-	CodexIdentityMode string `json:"codex_identity_mode,omitempty"`
-
 	// ReasoningEffortRulesEnabled enables per-model reasoning effort rules on this channel.
 	ReasoningEffortRulesEnabled bool `json:"reasoning_effort_rules_enabled,omitempty"`
 	// ReasoningEffortRules matches OriginModelName (client model or mapping source key).
@@ -68,10 +64,7 @@ const (
 
 	DefaultMessagesRoleFallback = "system"
 
-	CodexIdentityModeAuto        = "auto"
-	CodexIdentityModePassthrough = "passthrough"
-	CodexIdentityModeSynthesize  = "synthesize"
-	DefaultCodexClientName       = "codex_cli_rs"
+	DefaultCodexClientName = "codex_cli_rs"
 )
 
 // codexClientVersionPattern requires a leading numeric triple (X.Y.Z); optional
@@ -148,29 +141,18 @@ func (s *ChannelSettings) ValidateReasoningEffortRules() error {
 	return nil
 }
 
-// ValidateCodexCompat validates Sub2API Codex compatibility channel settings.
+// ValidateCodexCompat validates "Simulate Codex client" channel settings.
 // No-op when CodexCompatEnabled is false.
 func (s *ChannelSettings) ValidateCodexCompat() error {
 	if s == nil || !s.CodexCompatEnabled {
 		return nil
 	}
-	mode := strings.ToLower(strings.TrimSpace(s.CodexIdentityMode))
-	if mode == "" {
-		mode = CodexIdentityModeAuto
+	version := strings.TrimSpace(s.CodexClientVersion)
+	if version == "" {
+		return fmt.Errorf("codex_client_version is required when codex_compat is enabled")
 	}
-	switch mode {
-	case CodexIdentityModeAuto, CodexIdentityModePassthrough, CodexIdentityModeSynthesize:
-	default:
-		return fmt.Errorf("invalid codex_identity_mode: %s", s.CodexIdentityMode)
-	}
-	if mode == CodexIdentityModeAuto || mode == CodexIdentityModeSynthesize {
-		version := strings.TrimSpace(s.CodexClientVersion)
-		if version == "" {
-			return fmt.Errorf("codex_client_version is required when codex_compat is enabled with identity mode %s", mode)
-		}
-		if !codexClientVersionPattern.MatchString(version) {
-			return fmt.Errorf("invalid codex_client_version: %s", s.CodexClientVersion)
-		}
+	if !codexClientVersionPattern.MatchString(version) {
+		return fmt.Errorf("invalid codex_client_version: %s", s.CodexClientVersion)
 	}
 	return nil
 }
@@ -269,15 +251,15 @@ func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {
 }
 
 const (
-	advancedCustomConverterNone                             = "none"
-	advancedCustomConverterClaudeMessagesToOpenAIChat       = "anthropic_messages_to_openai_chat_completions"
-	advancedCustomConverterOpenAIChatToClaudeMessages       = "openai_chat_completions_to_anthropic_messages"
-	advancedCustomConverterOpenAIChatToOpenAIResponses      = "openai_chat_completions_to_openai_responses"
-	advancedCustomConverterOpenAIResponsesToOpenAIChat      = "openai_responses_to_openai_chat_completions"
-	advancedCustomConverterOpenAIResponsesToClaudeMessages  = "openai_responses_to_claude_messages"
-	advancedCustomConverterOpenAIResponsesToGemini          = "openai_responses_to_gemini_generate_content"
-	advancedCustomConverterGeminiContentToOpenAIChat        = "gemini_generate_content_to_openai_chat_completions"
-	advancedCustomConverterOpenAIChatToGeminiContent        = "openai_chat_completions_to_gemini_generate_content"
+	advancedCustomConverterNone                            = "none"
+	advancedCustomConverterClaudeMessagesToOpenAIChat      = "anthropic_messages_to_openai_chat_completions"
+	advancedCustomConverterOpenAIChatToClaudeMessages      = "openai_chat_completions_to_anthropic_messages"
+	advancedCustomConverterOpenAIChatToOpenAIResponses     = "openai_chat_completions_to_openai_responses"
+	advancedCustomConverterOpenAIResponsesToOpenAIChat     = "openai_responses_to_openai_chat_completions"
+	advancedCustomConverterOpenAIResponsesToClaudeMessages = "openai_responses_to_claude_messages"
+	advancedCustomConverterOpenAIResponsesToGemini         = "openai_responses_to_gemini_generate_content"
+	advancedCustomConverterGeminiContentToOpenAIChat       = "gemini_generate_content_to_openai_chat_completions"
+	advancedCustomConverterOpenAIChatToGeminiContent       = "openai_chat_completions_to_gemini_generate_content"
 )
 
 const (
