@@ -150,12 +150,8 @@ import { useChannelMutateForm } from '../../hooks/use-channel-mutate-form'
 import {
   CHANNEL_FORM_DEFAULT_VALUES,
   CHANNEL_TYPE_ADVANCED_CUSTOM,
-  CHANNEL_TYPE_SUB2API,
   channelFormSchema,
   channelsQueryKeys,
-  CODEX_IDENTITY_MODE_AUTO,
-  CODEX_IDENTITY_MODE_PASSTHROUGH,
-  CODEX_IDENTITY_MODE_SYNTHESIZE,
   DEFAULT_CODEX_CLIENT_VERSION,
   DEFAULT_MESSAGES_ROLE_ALLOWED_LIST,
   DEFAULT_MESSAGES_ROLE_FALLBACK,
@@ -308,8 +304,7 @@ const SENSITIVE_FORM_FIELDS = [
   'codex_compat_enabled',
   'codex_client_version',
   'codex_client_name',
-  'codex_identity_mode',
-  'chat_completions_to_responses',
+  'claude_compat_enabled',
   'reasoning_effort_rules_enabled',
   'reasoning_effort_rules',
   'allow_service_tier',
@@ -367,7 +362,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.system_prompt_override ||
     values.messages_role_compatibility_enabled ||
     values.codex_compat_enabled ||
-    values.chat_completions_to_responses ||
+    values.claude_compat_enabled ||
     values.reasoning_effort_rules_enabled ||
     (values.reasoning_effort_rules &&
       values.reasoning_effort_rules.length > 0) ||
@@ -776,10 +771,6 @@ export function ChannelMutateDrawer({
   const currentForceFormat = form.watch('force_format')
   const currentThinkingToContent = form.watch('thinking_to_content')
   const currentPassThroughBodyEnabled = form.watch('pass_through_body_enabled')
-  const currentCodexCompatEnabled = form.watch('codex_compat_enabled')
-  const currentChatCompletionsToResponses = form.watch(
-    'chat_completions_to_responses'
-  )
   const currentReasoningEffortRulesEnabled = form.watch(
     'reasoning_effort_rules_enabled'
   )
@@ -1068,8 +1059,6 @@ export function ChannelMutateDrawer({
     currentForceFormat ||
     currentThinkingToContent ||
     currentPassThroughBodyEnabled ||
-    currentCodexCompatEnabled ||
-    currentChatCompletionsToResponses ||
     currentReasoningEffortRulesEnabled ||
     (currentReasoningEffortRules &&
       currentReasoningEffortRules.length > 0) ||
@@ -2922,6 +2911,130 @@ export function ChannelMutateDrawer({
                               />
                             )}
 
+                            {currentType === CHANNEL_TYPE_ADVANCED_CUSTOM && (
+                              <div className='space-y-4 border-t px-4 py-3'>
+                                <FormField
+                                  control={form.control}
+                                  name='codex_compat_enabled'
+                                  render={({ field }) => (
+                                    <FormItem className='flex items-center justify-between'>
+                                      <div className='space-y-0.5'>
+                                        <FormLabel>
+                                          {t('Simulate Codex client')}
+                                        </FormLabel>
+                                        <FormDescription>
+                                          {t(
+                                            'Spoof official Codex CLI identity (User-Agent, originator) for upstreams that gate on the Codex client family. Client-provided session, thread, and x-codex-* headers are passed through unchanged.'
+                                          )}
+                                        </FormDescription>
+                                      </div>
+                                      <FormControl>
+                                        <Switch
+                                          checked={field.value === true}
+                                          onCheckedChange={(checked) => {
+                                            field.onChange(checked)
+                                            if (
+                                              checked &&
+                                              !form
+                                                .getValues('codex_client_version')
+                                                ?.trim()
+                                            ) {
+                                              form.setValue(
+                                                'codex_client_version',
+                                                DEFAULT_CODEX_CLIENT_VERSION,
+                                                {
+                                                  shouldDirty: true,
+                                                  shouldValidate: true,
+                                                }
+                                              )
+                                            }
+                                          }}
+                                        />
+                                      </FormControl>
+                                    </FormItem>
+                                  )}
+                                />
+
+                                {form.watch('codex_compat_enabled') === true && (
+                                  <>
+                                    <FormField
+                                      control={form.control}
+                                      name='codex_client_version'
+                                      render={({ field }) => (
+                                        <FormItem>
+                                          <FormLabel>
+                                            {t('Codex client version')}
+                                          </FormLabel>
+                                          <FormControl>
+                                            <Input
+                                              placeholder={
+                                                DEFAULT_CODEX_CLIENT_VERSION
+                                              }
+                                              {...field}
+                                            />
+                                          </FormControl>
+                                          <FormDescription>
+                                            {t(
+                                              'Codex client version must start with X.Y.Z (e.g. 0.146.0)'
+                                            )}
+                                          </FormDescription>
+                                          <FormMessage />
+                                        </FormItem>
+                                      )}
+                                    />
+                                    <FormField
+                                      control={form.control}
+                                      name='codex_client_name'
+                                      render={({ field }) => (
+                                        <FormItem>
+                                          <FormLabel>
+                                            {t('Codex client name')}
+                                          </FormLabel>
+                                          <FormControl>
+                                            <Input
+                                              placeholder='codex_cli_rs'
+                                              {...field}
+                                            />
+                                          </FormControl>
+                                          <FormDescription>
+                                            {t(
+                                              'Optional. Defaults to codex_cli_rs; used as the User-Agent client segment and originator.'
+                                            )}
+                                          </FormDescription>
+                                          <FormMessage />
+                                        </FormItem>
+                                      )}
+                                    />
+                                  </>
+                                )}
+
+                                <FormField
+                                  control={form.control}
+                                  name='claude_compat_enabled'
+                                  render={({ field }) => (
+                                    <FormItem className='flex items-center justify-between'>
+                                      <div className='space-y-0.5'>
+                                        <FormLabel>
+                                          {t('Simulate Claude Code client')}
+                                        </FormLabel>
+                                        <FormDescription>
+                                          {t(
+                                            'Shape Claude Messages requests like the official Claude Code CLI: claude-cli User-Agent, anthropic-beta claude-code-20250219, x-app: cli, and the Claude Code identity line as the first system block. Enable when the gateway only accepts Claude Code clients.'
+                                          )}
+                                        </FormDescription>
+                                      </div>
+                                      <FormControl>
+                                        <Switch
+                                          checked={field.value === true}
+                                          onCheckedChange={field.onChange}
+                                        />
+                                      </FormControl>
+                                    </FormItem>
+                                  )}
+                                />
+                              </div>
+                            )}
+
                             <ChannelAuthSection>
                               {!isEditing && (
                                 <FormField
@@ -4200,238 +4313,6 @@ export function ChannelMutateDrawer({
                                   </FormItem>
                                 )}
                               />
-
-                              {currentType === CHANNEL_TYPE_SUB2API && (
-                                <>
-                                  <FormField
-                                    control={form.control}
-                                    name='codex_compat_enabled'
-                                    render={({ field }) => (
-                                      <FormItem className='flex items-center justify-between px-4 py-3'>
-                                        <div className='space-y-0.5'>
-                                          <FormLabel>
-                                            {t('Codex compatibility')}
-                                          </FormLabel>
-                                          <FormDescription>
-                                            {t(
-                                              'Shape Sub2API requests like official Codex CLI. Prefer Auto to preserve real CLI identity headers; Synthesize builds sticky session/thread/window IDs for non-CLI clients. Enable codex_cli_only on Sub2API OAuth accounts when required.'
-                                            )}
-                                          </FormDescription>
-                                        </div>
-                                        <FormControl>
-                                          <Switch
-                                            checked={field.value === true}
-                                            onCheckedChange={(checked) => {
-                                              field.onChange(checked)
-                                              if (checked) {
-                                                if (
-                                                  !form
-                                                    .getValues(
-                                                      'codex_client_version'
-                                                    )
-                                                    ?.trim()
-                                                ) {
-                                                  form.setValue(
-                                                    'codex_client_version',
-                                                    DEFAULT_CODEX_CLIENT_VERSION,
-                                                    {
-                                                      shouldDirty: true,
-                                                      shouldValidate: true,
-                                                    }
-                                                  )
-                                                }
-                                                if (
-                                                  !form.getValues(
-                                                    'codex_identity_mode'
-                                                  )
-                                                ) {
-                                                  form.setValue(
-                                                    'codex_identity_mode',
-                                                    CODEX_IDENTITY_MODE_AUTO,
-                                                    {
-                                                      shouldDirty: true,
-                                                      shouldValidate: true,
-                                                    }
-                                                  )
-                                                }
-                                              }
-                                            }}
-                                          />
-                                        </FormControl>
-                                      </FormItem>
-                                    )}
-                                  />
-
-                                  {currentCodexCompatEnabled && (
-                                    <div className='space-y-4 border-t px-4 py-3'>
-                                      <FormField
-                                        control={form.control}
-                                        name='codex_client_version'
-                                        render={({ field }) => (
-                                          <FormItem>
-                                            <FormLabel>
-                                              {t('Codex client version')}
-                                            </FormLabel>
-                                            <FormControl>
-                                              <Input
-                                                placeholder={
-                                                  DEFAULT_CODEX_CLIENT_VERSION
-                                                }
-                                                {...field}
-                                              />
-                                            </FormControl>
-                                            <FormDescription>
-                                              {t(
-                                                'Synthetic User-Agent engine version (X.Y.Z). Required for Auto and Synthesize identity modes.'
-                                              )}
-                                            </FormDescription>
-                                            <FormMessage />
-                                          </FormItem>
-                                        )}
-                                      />
-
-                                      <FormField
-                                        control={form.control}
-                                        name='codex_client_name'
-                                        render={({ field }) => (
-                                          <FormItem>
-                                            <FormLabel>
-                                              {t('Codex client name')}
-                                            </FormLabel>
-                                            <FormControl>
-                                              <Input
-                                                placeholder='codex_cli_rs'
-                                                {...field}
-                                              />
-                                            </FormControl>
-                                            <FormDescription>
-                                              {t(
-                                                'Synthetic originator / User-Agent client segment. Leave empty to use codex_cli_rs.'
-                                              )}
-                                            </FormDescription>
-                                            <FormMessage />
-                                          </FormItem>
-                                        )}
-                                      />
-
-                                      <FormField
-                                        control={form.control}
-                                        name='codex_identity_mode'
-                                        render={({ field }) => (
-                                          <FormItem>
-                                            <FormLabel>
-                                              {t('Codex identity mode')}
-                                            </FormLabel>
-                                            <Select
-                                              items={[
-                                                {
-                                                  value:
-                                                    CODEX_IDENTITY_MODE_AUTO,
-                                                  label: t('Auto'),
-                                                },
-                                                {
-                                                  value:
-                                                    CODEX_IDENTITY_MODE_PASSTHROUGH,
-                                                  label: t('Passthrough'),
-                                                },
-                                                {
-                                                  value:
-                                                    CODEX_IDENTITY_MODE_SYNTHESIZE,
-                                                  label: t('Synthesize'),
-                                                },
-                                              ]}
-                                              value={
-                                                field.value ||
-                                                CODEX_IDENTITY_MODE_AUTO
-                                              }
-                                              onValueChange={(value) => {
-                                                if (
-                                                  value ===
-                                                    CODEX_IDENTITY_MODE_PASSTHROUGH ||
-                                                  value ===
-                                                    CODEX_IDENTITY_MODE_SYNTHESIZE
-                                                ) {
-                                                  field.onChange(value)
-                                                } else {
-                                                  field.onChange(
-                                                    CODEX_IDENTITY_MODE_AUTO
-                                                  )
-                                                }
-                                              }}
-                                            >
-                                              <FormControl>
-                                                <SelectTrigger>
-                                                  <SelectValue />
-                                                </SelectTrigger>
-                                              </FormControl>
-                                              <SelectContent
-                                                alignItemWithTrigger={false}
-                                              >
-                                                <SelectGroup>
-                                                  <SelectItem
-                                                    value={
-                                                      CODEX_IDENTITY_MODE_AUTO
-                                                    }
-                                                  >
-                                                    {t('Auto')}
-                                                  </SelectItem>
-                                                  <SelectItem
-                                                    value={
-                                                      CODEX_IDENTITY_MODE_PASSTHROUGH
-                                                    }
-                                                  >
-                                                    {t('Passthrough')}
-                                                  </SelectItem>
-                                                  <SelectItem
-                                                    value={
-                                                      CODEX_IDENTITY_MODE_SYNTHESIZE
-                                                    }
-                                                  >
-                                                    {t('Synthesize')}
-                                                  </SelectItem>
-                                                </SelectGroup>
-                                              </SelectContent>
-                                            </Select>
-                                            <FormDescription>
-                                              {t(
-                                                'Auto preserves official Codex CLI identity when present, otherwise synthesizes sticky IDs. Passthrough never rewrites identity headers. Synthesize always builds sticky session, thread, and window IDs.'
-                                              )}
-                                            </FormDescription>
-                                            <FormMessage />
-                                          </FormItem>
-                                        )}
-                                      />
-                                    </div>
-                                  )}
-
-                                  <FormField
-                                    control={form.control}
-                                    name='chat_completions_to_responses'
-                                    render={({ field }) => (
-                                      <FormItem className='flex items-center justify-between px-4 py-3'>
-                                        <div className='space-y-0.5'>
-                                          <FormLabel>
-                                            {t(
-                                              'Chat Completions → Responses'
-                                            )}
-                                          </FormLabel>
-                                          <FormDescription>
-                                            {t(
-                                              'When enabled, convert Chat Completions (CC) requests to the OpenAI Responses API before sending them to Sub2API upstream. Native Responses and other protocols are left unchanged.'
-                                            )}
-                                          </FormDescription>
-                                        </div>
-                                        <FormControl>
-                                          <Switch
-                                            checked={field.value === true}
-                                            onCheckedChange={field.onChange}
-                                          />
-                                        </FormControl>
-                                      </FormItem>
-                                    )}
-                                  />
-                                </>
-                              )}
 
                               <FormField
                                 control={form.control}

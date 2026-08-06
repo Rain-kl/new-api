@@ -56,12 +56,6 @@ export const DEFAULT_MESSAGES_ROLE_ALLOWED_LIST = [
 
 export const DEFAULT_MESSAGES_ROLE_FALLBACK = 'system'
 
-/** Sub2API channel type (Codex compatibility settings apply only here). */
-export const CHANNEL_TYPE_SUB2API = 59
-
-export const CODEX_IDENTITY_MODE_AUTO = 'auto'
-export const CODEX_IDENTITY_MODE_PASSTHROUGH = 'passthrough'
-export const CODEX_IDENTITY_MODE_SYNTHESIZE = 'synthesize'
 export const DEFAULT_CODEX_CLIENT_VERSION = '0.146.0'
 
 /** Leading X.Y.Z required; optional pre-release suffix allowed (matches backend). */
@@ -287,19 +281,11 @@ export const channelFormSchema = z
     messages_role_compatibility_enabled: z.boolean().optional(),
     messages_role_allowed_list: z.array(z.string()).optional(),
     messages_role_fallback: z.string().optional(),
-    // Sub2API Codex compatibility (stored in setting JSON, type 59 only)
+    // Advanced Custom client compatibility (stored in setting JSON, type 58 only)
     codex_compat_enabled: z.boolean().optional(),
     codex_client_version: z.string().optional(),
     codex_client_name: z.string().optional(),
-    codex_identity_mode: z
-      .enum([
-        CODEX_IDENTITY_MODE_AUTO,
-        CODEX_IDENTITY_MODE_PASSTHROUGH,
-        CODEX_IDENTITY_MODE_SYNTHESIZE,
-      ])
-      .optional(),
-    // Sub2API: convert Chat Completions → Responses before upstream
-    chat_completions_to_responses: z.boolean().optional(),
+    claude_compat_enabled: z.boolean().optional(),
     // Reasoning effort rules (stored in setting JSON)
     reasoning_effort_rules_enabled: z.boolean().optional(),
     reasoning_effort_rules: z
@@ -409,29 +395,22 @@ export const channelFormSchema = z
     }
 
     if (
-      data.type === CHANNEL_TYPE_SUB2API &&
+      data.type === CHANNEL_TYPE_ADVANCED_CUSTOM &&
       data.codex_compat_enabled === true
     ) {
-      const mode =
-        data.codex_identity_mode || CODEX_IDENTITY_MODE_AUTO
-      if (
-        mode === CODEX_IDENTITY_MODE_AUTO ||
-        mode === CODEX_IDENTITY_MODE_SYNTHESIZE
-      ) {
-        const version = data.codex_client_version?.trim() || ''
-        if (!version) {
-          addRequiredIssue(
-            ctx,
-            'codex_client_version',
-            'Codex client version is required when Codex compatibility is enabled'
-          )
-        } else if (!CODEX_CLIENT_VERSION_PATTERN.test(version)) {
-          addRequiredIssue(
-            ctx,
-            'codex_client_version',
-            'Codex client version must start with X.Y.Z (e.g. 0.146.0)'
-          )
-        }
+      const version = data.codex_client_version?.trim() || ''
+      if (!version) {
+        addRequiredIssue(
+          ctx,
+          'codex_client_version',
+          'Codex client version is required when Codex compatibility is enabled'
+        )
+      } else if (!CODEX_CLIENT_VERSION_PATTERN.test(version)) {
+        addRequiredIssue(
+          ctx,
+          'codex_client_version',
+          'Codex client version must start with X.Y.Z (e.g. 0.146.0)'
+        )
       }
     }
 
@@ -587,8 +566,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   codex_compat_enabled: false,
   codex_client_version: DEFAULT_CODEX_CLIENT_VERSION,
   codex_client_name: '',
-  codex_identity_mode: CODEX_IDENTITY_MODE_AUTO,
-  chat_completions_to_responses: false,
+  claude_compat_enabled: false,
   reasoning_effort_rules_enabled: false,
   reasoning_effort_rules: [],
   // Type-specific settings
@@ -637,12 +615,8 @@ export function transformChannelToFormDefaults(
     messages_role_fallback: DEFAULT_MESSAGES_ROLE_FALLBACK,
     codex_compat_enabled: false,
     codex_client_version: DEFAULT_CODEX_CLIENT_VERSION,
-    codex_identity_mode: CODEX_IDENTITY_MODE_AUTO as
-      | 'auto'
-      | 'passthrough'
-      | 'synthesize',
     codex_client_name: '',
-    chat_completions_to_responses: false,
+    claude_compat_enabled: false,
     reasoning_effort_rules_enabled: false,
     reasoning_effort_rules: [] as Array<{
       model: string
@@ -663,15 +637,6 @@ export function transformChannelToFormDefaults(
             .map((role: unknown) => String(role).trim())
             .filter(Boolean)
         : []
-      const identityModeRaw =
-        typeof parsed.codex_identity_mode === 'string'
-          ? parsed.codex_identity_mode.trim().toLowerCase()
-          : ''
-      const identityMode =
-        identityModeRaw === CODEX_IDENTITY_MODE_PASSTHROUGH ||
-        identityModeRaw === CODEX_IDENTITY_MODE_SYNTHESIZE
-          ? identityModeRaw
-          : CODEX_IDENTITY_MODE_AUTO
       const parsedProxyId =
         typeof parsed.proxy_id === 'number'
           ? parsed.proxy_id
@@ -708,9 +673,7 @@ export function transformChannelToFormDefaults(
           typeof parsed.codex_client_name === 'string'
             ? parsed.codex_client_name
             : '',
-        codex_identity_mode: identityMode,
-        chat_completions_to_responses:
-          parsed.chat_completions_to_responses === true,
+        claude_compat_enabled: parsed.claude_compat_enabled === true,
         reasoning_effort_rules_enabled:
           parsed.reasoning_effort_rules_enabled === true,
         reasoning_effort_rules: Array.isArray(parsed.reasoning_effort_rules)
@@ -877,8 +840,8 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
       formData.messages_role_fallback?.trim() || DEFAULT_MESSAGES_ROLE_FALLBACK
   }
 
-  // Sub2API Codex compatibility (type 59 only)
-  if (formData.type === CHANNEL_TYPE_SUB2API) {
+  // Advanced Custom client compatibility (type 58 only)
+  if (formData.type === CHANNEL_TYPE_ADVANCED_CUSTOM) {
     if (formData.codex_compat_enabled === true) {
       settingObj.codex_compat_enabled = true
       settingObj.codex_client_version =
@@ -887,13 +850,11 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
       if (clientName) {
         settingObj.codex_client_name = clientName
       }
-      settingObj.codex_identity_mode =
-        formData.codex_identity_mode || CODEX_IDENTITY_MODE_AUTO
     } else {
       settingObj.codex_compat_enabled = false
     }
-    if (formData.chat_completions_to_responses === true) {
-      settingObj.chat_completions_to_responses = true
+    if (formData.claude_compat_enabled === true) {
+      settingObj.claude_compat_enabled = true
     }
   }
 

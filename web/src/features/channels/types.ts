@@ -95,8 +95,7 @@ export interface ChannelSettings {
   codex_compat_enabled?: boolean
   codex_client_version?: string
   codex_client_name?: string
-  codex_identity_mode?: 'auto' | 'passthrough' | 'synthesize' | string
-  chat_completions_to_responses?: boolean
+  claude_compat_enabled?: boolean
   reasoning_effort_rules_enabled?: boolean
   reasoning_effort_rules?: Array<{
     model: string
