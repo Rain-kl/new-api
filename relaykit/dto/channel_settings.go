@@ -48,13 +48,6 @@ type ChannelSettings struct {
 	// Empty is treated as auto.
 	CodexIdentityMode string `json:"codex_identity_mode,omitempty"`
 
-	// ChatCompletionsToResponses converts inbound Chat Completions requests to
-	// the OpenAI Responses API before calling upstream. Intended for Sub2API
-	// (and similar) gateways that prefer /v1/responses. Default false.
-	// When true, all chat-completions traffic on this channel is converted
-	// regardless of the global chat_completions_to_responses_policy.
-	ChatCompletionsToResponses bool `json:"chat_completions_to_responses,omitempty"`
-
 	// ReasoningEffortRulesEnabled enables per-model reasoning effort rules on this channel.
 	ReasoningEffortRulesEnabled bool `json:"reasoning_effort_rules_enabled,omitempty"`
 	// ReasoningEffortRules matches OriginModelName (client model or mapping source key).

@@ -125,14 +125,12 @@ func TestChannelSettingsCodexCompatJSONRoundTrip(t *testing.T) {
 	assert.NotContains(t, string(empty), "codex_compat")
 	assert.NotContains(t, string(empty), "codex_client")
 	assert.NotContains(t, string(empty), "codex_identity")
-	assert.NotContains(t, string(empty), "chat_completions_to_responses")
 
 	src := ChannelSettings{
-		CodexCompatEnabled:         true,
-		CodexClientVersion:         "0.146.0",
-		CodexClientName:            "codex_cli_rs",
-		CodexIdentityMode:          CodexIdentityModeAuto,
-		ChatCompletionsToResponses: true,
+		CodexCompatEnabled: true,
+		CodexClientVersion: "0.146.0",
+		CodexClientName:    "codex_cli_rs",
+		CodexIdentityMode:  CodexIdentityModeAuto,
 	}
 	encoded, err := json.Marshal(src)
 	require.NoError(t, err)
@@ -140,7 +138,6 @@ func TestChannelSettingsCodexCompatJSONRoundTrip(t *testing.T) {
 	assert.Contains(t, string(encoded), `"codex_client_version":"0.146.0"`)
 	assert.Contains(t, string(encoded), `"codex_client_name":"codex_cli_rs"`)
 	assert.Contains(t, string(encoded), `"codex_identity_mode":"auto"`)
-	assert.Contains(t, string(encoded), `"chat_completions_to_responses":true`)
 
 	var decoded ChannelSettings
 	require.NoError(t, json.Unmarshal(encoded, &decoded))

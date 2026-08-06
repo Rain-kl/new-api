@@ -57,20 +57,3 @@ func ShouldChatCompletionsUseResponsesGlobal(channelID int, channelType int, mod
 		model,
 	)
 }
-
-// ShouldChatCompletionsUseResponses reports whether chat completions should be
-// upgraded to the Responses API for this request.
-//
-// Order:
-//  1. Channel types that registered a skip (Echo, etc.) never convert.
-//  2. Channel setting chat_completions_to_responses forces conversion for all models.
-//  3. Otherwise fall back to the global policy (channel allowlist + model patterns).
-func ShouldChatCompletionsUseResponses(channelID int, channelType int, model string, channelForce bool) bool {
-	if common.ShouldSkipChatCompletionsToResponses(channelType) {
-		return false
-	}
-	if channelForce {
-		return true
-	}
-	return ShouldChatCompletionsUseResponsesGlobal(channelID, channelType, model)
-}
