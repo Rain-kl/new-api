@@ -34,12 +34,13 @@ type ChannelSettings struct {
 	// Empty means DefaultMessagesRoleFallback when compatibility is enabled.
 	MessagesRoleFallback string `json:"messages_role_fallback,omitempty"`
 
-	// CodexCompatEnabled enables Sub2API Codex-compatible identity headers/body
-	// shaping for type-59 channels. Default false (no behavior change).
+	// CodexCompatEnabled enables Advanced Custom "Simulate Codex client"
+	// identity headers (User-Agent/originator) for upstreams that gate on the
+	// official Codex CLI. Header-only: no request body shaping and no identity
+	// synthesis. Default false (no behavior change).
 	CodexCompatEnabled bool `json:"codex_compat_enabled,omitempty"`
-	// CodexClientVersion is the synthetic client version (X.Y.Z[+suffix]) used
-	// when synthesizing User-Agent. Required when compat is enabled and mode is
-	// auto or synthesize.
+	// CodexClientVersion is the codex client version (X.Y.Z[+suffix]) used in
+	// the simulated User-Agent. Required when codex compat is enabled.
 	CodexClientVersion string `json:"codex_client_version,omitempty"`
 	// CodexClientName is the synthetic originator / UA client segment.
 	// Empty defaults to DefaultCodexClientName at runtime.

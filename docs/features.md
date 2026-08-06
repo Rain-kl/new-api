@@ -325,9 +325,16 @@
 
 ---
 
-## 五、Sub2API Codex 兼容层（2026-08-05）
+## 五、Sub2API Codex 兼容层（2026-08-05）【已移除：能力迁移至 §十】
 
-### 需求背景
+> **2026-08-07 已移除**：该兼容层及其 `codex_identity_mode` / body 塑形 / ID 合成逻辑已删除
+> （`relay/channel/codexcompat/*` 包移除，commit `1bd7c844`）。「模拟 Codex 客户端」能力现由
+> **Advanced Custom（type=58）** 渠道的 `codex_compat_enabled` 提供（见 §十）：仅设置官方
+> Codex CLI 的 `User-Agent` / `originator` 并透传客户端 `session_id` / `thread_id` / `x-codex-*`
+> 请求头，**不做**任何 ID 合成。遗留 Sub2API 渠道上的 codex 设置不再生效，
+> `ValidateCodexCompat` 仅对 Advanced Custom 渠道执行。以下为历史行为记录。
+
+### 需求背景（历史）
 
 流量经 new-api **Sub2API（type=59）** 打到 sub2api 时，若上游账号开启 `codex_cli_only`，请求必须像官方 Codex 客户端（UA / originator / `x-codex-*`、稳定 session 等）。  
 **决策：不新增渠道类型**，在既有 Sub2API 上增加可选兼容层。设计与实现计划见：
@@ -362,9 +369,14 @@ Auth 仍为 `Authorization: Bearer <channel.key>`；路径仍以 `/v1/responses`
 
 ---
 
-## 六、Sub2API：Chat Completions → Responses（2026-08-05）
+## 六、Sub2API：Chat Completions → Responses（2026-08-05）【已移除】
 
-### 需求背景
+> **2026-08-07 已移除**：渠道级 `chat_completions_to_responses` 开关已删除（commit `e6f3a268`）。
+> CC→Responses 的决策回归全局策略 `global.chat_completions_to_responses_policy`
+> （allowlist + 模型正则）。Advanced Custom 渠道如需 Chat Completions → Responses，
+> 请使用路由级 converter `openai_chat_completions_to_openai_responses`。以下为历史行为记录。
+
+### 需求背景（历史）
 
 部分 Sub2API / 上游网关更偏好 `/v1/responses`。全局策略 `global.chat_completions_to_responses_policy` 依赖渠道白名单 + **模型正则**，运营不便。需要**渠道级开关**：只要客户端是 Chat Completions（CC），就转换为 Responses 再打上游。
 
@@ -433,7 +445,40 @@ Auth 仍为 `Authorization: Bearer <channel.key>`；路径仍以 `/v1/responses`
 
 ---
 
-## 近期增量索引（2026-08-03 ~ 2026-08-05）
+## 十、Advanced Custom：模拟 Codex / Claude Code 客户端（2026-08-07）
+
+### 需求背景
+
+部分上游网关按**客户端身份**放行：有的只认官方 Codex CLI（UA / originator / `x-codex-*`），
+有的只认 Claude Code CLI（claude-cli UA + `anthropic-beta: claude-code-20250219` + `x-app: cli`）。
+在 **Advanced Custom（type=58）** 渠道上提供两个开关，让出站请求伪装成对应官方 CLI。
+
+### 行为
+
+| 开关 | 字段 | 行为 |
+|------|------|------|
+| Simulate Codex client | `codex_compat_enabled` | 设置官方 Codex CLI `User-Agent`（`{codex_client_name}/{codex_client_version} (linux; x86_64)`）与 `originator`；透传客户端 `session_id` / `thread_id` / `x-codex-*` 请求头（名字按 http.Header 规范化）；**不做**任何 ID 合成 |
+| | `codex_client_version` | 必填（`X.Y.Z[+suffix]`），用于 UA 版本段 |
+| | `codex_client_name` | 可选，默认 `codex_cli_rs`，用于 UA 客户端段与 `originator` |
+| Simulate Claude Code client | `claude_compat_enabled` | claude-cli UA（`claude-cli/1.0.119 (external, cli)`）、`anthropic-beta: claude-code-20250219`、`x-app: cli`；并把 Claude Code 身份行（`You are Claude Code, Anthropic's official CLI for Claude.`）作为**第一个 system 块**幂等注入（已存在则不动） |
+| | 适用范围 | 仅对 Claude Messages 目标路由生效：converter `openai_chat_completions_to_anthropic_messages` / `openai_responses_to_claude_messages`，或 native `/v1/messages`（converter `none` + `RelayFormat=claude`） |
+
+> **注意**：两个开关面向不同上游（Codex 门控 vs Claude Code 门控），同一路由上不应同时开启。
+
+### 实现结构
+
+| 文件 | 职责 |
+|------|------|
+| `relay/channel/advancedcustom/compat.go` | header 注入 + Claude Code 身份行注入 |
+| `relay/channel/advancedcustom/adaptor.go` | `SetupRequestHeader` / Convert 路径挂钩 |
+| `relaykit/dto/channel_settings.go` | 字段 + `ValidateCodexCompat`（仅 Advanced Custom 渠道校验） |
+| `model/channel.go` | `ValidateSettings` 按渠道类型门控 |
+| `web/src/features/channels/components/drawers/channel-mutate-drawer.tsx` | 开关 UI |
+| `web/src/i18n/locales/*` | 文案 |
+
+---
+
+## 近期增量索引（2026-08-03 ~ 2026-08-07）
 
 | 日期 | 主题 | 章节 |
 |------|------|------|
@@ -441,7 +486,8 @@ Auth 仍为 `Authorization: Bearer <channel.key>`；路径仍以 `/v1/responses`
 | 08-04 | 消息 role 兼容 | §四 |
 | 08-04 | 上游倍率同步渠道选择器卡死 | §八 |
 | 08-05 | DeepSeek 无签名 thinking 剥离 | §七 |
-| 08-05 | Sub2API Codex 兼容层 | §五 |
-| 08-05 | Sub2API CC→Responses 渠道开关 | §六 |
+| 08-05 | Sub2API Codex 兼容层（已移除） | §五 |
+| 08-05 | Sub2API CC→Responses 渠道开关（已移除） | §六 |
+| 08-07 | Advanced Custom 模拟 Codex / Claude Code 客户端 | §十 |
 
-> 更细的 Codex 设计/任务拆分以 `docs/superpowers/` 下 2026-08-05 文档为准；本文只记落地行为与文件面。
+> 更细的 Codex 设计/任务拆分以 `docs/superpowers/` 下 2026-08-05 / 2026-08-06 文档为准；本文只记落地行为与文件面。

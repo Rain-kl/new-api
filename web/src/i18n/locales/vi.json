@@ -4339,7 +4339,7 @@
     "Setup Two-Factor Authentication": "Thiết lập Xác thực hai yếu tố",
     "Setup: three groups and one override matrix cell.": "Thiết lập: ba nhóm và một ô ma trận ghi đè.",
     "Setup: three groups and one override rule.": "Thiết lập: ba nhóm và một quy tắc ghi đè.",
-    "Shape Claude Messages requests like the official Claude Code CLI: claude-cli User-Agent, anthropic-beta claude-code-20250219, x-app: cli, and the Claude Code identity line as the first system block. Enable when the gateway only accepts Claude Code clients.": "Định dạng yêu cầu Claude Messages giống CLI Claude Code chính thức: User-Agent claude-cli, anthropic-beta claude-code-20250219, x-app: cli và dòng danh tính Claude Code làm block system đầu tiên. Bật khi gateway chỉ chấp nhận máy khách Claude Code.",
+    "Shape Claude Messages requests like the official Claude Code CLI: claude-cli User-Agent, anthropic-beta claude-code-20250219, x-app: cli, and the Claude Code identity line as the first system block. Targets Claude Messages routes only; do not combine with Simulate Codex client.": "Định dạng yêu cầu Claude Messages giống CLI Claude Code chính thức: User-Agent claude-cli, anthropic-beta claude-code-20250219, x-app: cli và dòng danh tính Claude Code làm block system đầu tiên. Chỉ áp dụng cho các route Claude Messages; không kết hợp với 'Mô phỏng máy khách Codex'.",
     "Share": "Tỉ lệ",
     "Share your link and earn rewards": "Chia sẻ liên kết của bạn và kiếm phần thưởng",
     "Shared configuration for all payment gateways": "Cấu hình chung cho tất cả các cổng thanh toán",

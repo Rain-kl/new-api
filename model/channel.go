@@ -963,8 +963,10 @@ func (channel *Channel) ValidateSettings() error {
 	if err := channelParams.ValidateMessagesRoleCompatibility(); err != nil {
 		return err
 	}
-	if err := channelParams.ValidateCodexCompat(); err != nil {
-		return err
+	if channel.Type == constant.ChannelTypeAdvancedCustom {
+		if err := channelParams.ValidateCodexCompat(); err != nil {
+			return err
+		}
 	}
 	if err := channelParams.ValidateReasoningEffortRules(); err != nil {
 		return err

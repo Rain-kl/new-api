@@ -4339,7 +4339,7 @@
     "Setup Two-Factor Authentication": "2要素認証を設定",
     "Setup: three groups and one override matrix cell.": "設定：3つのグループと1つのマトリクスセル。",
     "Setup: three groups and one override rule.": "設定：3つのグループと1つの上書きルール。",
-    "Shape Claude Messages requests like the official Claude Code CLI: claude-cli User-Agent, anthropic-beta claude-code-20250219, x-app: cli, and the Claude Code identity line as the first system block. Enable when the gateway only accepts Claude Code clients.": "Claude Messages リクエストを公式 Claude Code CLI と同じ形に整えます：claude-cli User-Agent、anthropic-beta claude-code-20250219、x-app: cli、そして Claude Code の ID 行を最初の system ブロックとして付与します。ゲートウェイが Claude Code クライアントのみ受け付ける場合に有効にしてください。",
+    "Shape Claude Messages requests like the official Claude Code CLI: claude-cli User-Agent, anthropic-beta claude-code-20250219, x-app: cli, and the Claude Code identity line as the first system block. Targets Claude Messages routes only; do not combine with Simulate Codex client.": "Claude Messages リクエストを公式 Claude Code CLI と同じ形に整えます：claude-cli User-Agent、anthropic-beta claude-code-20250219、x-app: cli、そして Claude Code の ID 行を最初の system ブロックとして付与します。対象は Claude Messages ルートのみ。「Codex クライアントをシミュレート」と併用しないでください。",
     "Share": "シェア",
     "Share your link and earn rewards": "リンクを共有して報酬を獲得",
     "Shared configuration for all payment gateways": "すべての決済ゲートウェイの共有設定",

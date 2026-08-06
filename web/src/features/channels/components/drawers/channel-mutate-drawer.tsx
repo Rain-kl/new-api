@@ -361,8 +361,6 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.pass_through_body_enabled ||
     values.system_prompt_override ||
     values.messages_role_compatibility_enabled ||
-    values.codex_compat_enabled ||
-    values.claude_compat_enabled ||
     values.reasoning_effort_rules_enabled ||
     (values.reasoning_effort_rules &&
       values.reasoning_effort_rules.length > 0) ||
@@ -3019,7 +3017,7 @@ export function ChannelMutateDrawer({
                                         </FormLabel>
                                         <FormDescription>
                                           {t(
-                                            'Shape Claude Messages requests like the official Claude Code CLI: claude-cli User-Agent, anthropic-beta claude-code-20250219, x-app: cli, and the Claude Code identity line as the first system block. Enable when the gateway only accepts Claude Code clients.'
+                                            'Shape Claude Messages requests like the official Claude Code CLI: claude-cli User-Agent, anthropic-beta claude-code-20250219, x-app: cli, and the Claude Code identity line as the first system block. Targets Claude Messages routes only; do not combine with Simulate Codex client.'
                                           )}
                                         </FormDescription>
                                       </div>

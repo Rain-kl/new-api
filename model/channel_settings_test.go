@@ -41,6 +41,38 @@ func TestChannelValidateSettingsRejectsInvalidHTTPTransport(t *testing.T) {
 	}
 }
 
+func TestChannelValidateSettingsGatesCodexCompatToAdvancedCustom(t *testing.T) {
+	// A legacy Sub2API channel that still carries codex compat settings must
+	// not be rejected by Advanced Custom validation.
+	legacy := &Channel{Type: constant.ChannelTypeSub2API}
+	legacy.SetSetting(dto.ChannelSettings{
+		CodexCompatEnabled: true,
+		CodexClientVersion: "",
+	})
+	require.NoError(t, legacy.ValidateSettings())
+
+	// Advanced Custom channels still require a codex client version.
+	advanced := &Channel{Type: constant.ChannelTypeAdvancedCustom}
+	advanced.SetOtherSettings(dto.ChannelOtherSettings{
+		AdvancedCustom: &dto.AdvancedCustomConfig{
+			Routes: []dto.AdvancedCustomRoute{
+				{
+					IncomingPath: "/v1/chat/completions",
+					UpstreamPath: "/v1/chat/completions",
+					Converter:    "none",
+				},
+			},
+		},
+	})
+	advanced.SetSetting(dto.ChannelSettings{
+		CodexCompatEnabled: true,
+		CodexClientVersion: "",
+	})
+	err := advanced.ValidateSettings()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "codex_client_version")
+}
+
 func TestAdvancedCustomChannelRequiresModelListRouteOnlyWhenUpdateChecksEnabled(t *testing.T) {
 	inferenceRoute := dto.AdvancedCustomRoute{
 		IncomingPath: "/v1/chat/completions",

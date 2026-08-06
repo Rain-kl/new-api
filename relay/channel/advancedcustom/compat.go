@@ -25,7 +25,8 @@ const (
 // applyCodexIdentityHeaders shapes outbound requests like the official Codex CLI
 // when the "Simulate Codex client" channel setting is enabled. It sets
 // User-Agent/originator and passes through client-provided conversation headers
-// (session_id, thread_id, x-codex-*) unchanged. It never synthesizes IDs.
+// (session_id, thread_id, x-codex-*), with names canonicalized by http.Header.
+// It never synthesizes IDs.
 func applyCodexIdentityHeaders(c *gin.Context, header *http.Header, info *relaycommon.RelayInfo) {
 	if header == nil || info == nil {
 		return

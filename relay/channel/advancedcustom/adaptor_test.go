@@ -2,10 +2,12 @@ package advancedcustom
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -815,6 +817,226 @@ func TestAdaptorConvertsGeminiRequestToOpenAIChatUpstream(t *testing.T) {
 	assert.Equal(t, "gpt-test", chatReq.Model)
 	require.Len(t, chatReq.Messages, 1)
 	assert.Equal(t, "user", chatReq.Messages[0].Role)
+}
+
+func TestAdaptorSetupRequestHeaderCodexCompat(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{
+			{
+				IncomingPath: "/v1/chat/completions",
+				UpstreamPath: "https://upstream.example/v1/chat/completions",
+				Converter:    relayconvert.ConverterNone,
+			},
+		},
+	})
+	info.ChannelSetting.CodexCompatEnabled = true
+	info.ChannelSetting.CodexClientVersion = "0.146.0"
+	header := http.Header{}
+
+	require.NoError(t, adaptor.SetupRequestHeader(advancedCustomGinContext("/v1/chat/completions"), &header, info))
+	assert.True(t, strings.HasPrefix(header.Get("User-Agent"), "codex_cli_rs/0.146.0"))
+	assert.Equal(t, "codex_cli_rs", header.Get("originator"))
+}
+
+func TestAdaptorSetupRequestHeaderClaudeCompat(t *testing.T) {
+	t.Run("claude-targeted route applies claude-cli fingerprint", func(t *testing.T) {
+		adaptor := &Adaptor{}
+		info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+			Routes: []dto.AdvancedCustomRoute{
+				{
+					IncomingPath: "/v1/responses",
+					UpstreamPath: "https://api.anthropic.com/v1/messages",
+					Converter:    relayconvert.ConverterOpenAIResponsesToClaudeMessages,
+				},
+			},
+		})
+		info.RelayFormat = types.RelayFormatOpenAIResponses
+		info.RelayMode = relayconstant.RelayModeResponses
+		info.RequestURLPath = "/v1/responses"
+		info.ChannelSetting.ClaudeCompatEnabled = true
+		header := http.Header{}
+
+		require.NoError(t, adaptor.SetupRequestHeader(advancedCustomGinContext("/v1/responses"), &header, info))
+		assert.Equal(t, claudeCodeUserAgent, header.Get("User-Agent"))
+		assert.Equal(t, "cli", header.Get("x-app"))
+		assert.Contains(t, header.Get("anthropic-beta"), claudeCodeBeta)
+	})
+
+	t.Run("non-claude route does not apply claude-cli fingerprint", func(t *testing.T) {
+		adaptor := &Adaptor{}
+		info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+			Routes: []dto.AdvancedCustomRoute{
+				{
+					IncomingPath: "/v1/chat/completions",
+					UpstreamPath: "https://upstream.example/v1/chat/completions",
+					Converter:    relayconvert.ConverterNone,
+				},
+			},
+		})
+		info.ChannelSetting.ClaudeCompatEnabled = true
+		header := http.Header{}
+
+		require.NoError(t, adaptor.SetupRequestHeader(advancedCustomGinContext("/v1/chat/completions"), &header, info))
+		assert.NotEqual(t, claudeCodeUserAgent, header.Get("User-Agent"))
+		assert.Empty(t, header.Get("x-app"))
+		assert.Empty(t, header.Get("anthropic-beta"))
+	})
+}
+
+func TestAdaptorSetupRequestHeaderNoCompat(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{
+			{
+				IncomingPath: "/v1/chat/completions",
+				UpstreamPath: "https://upstream.example/v1/chat/completions",
+				Converter:    relayconvert.ConverterNone,
+			},
+		},
+	})
+	header := http.Header{}
+
+	require.NoError(t, adaptor.SetupRequestHeader(advancedCustomGinContext("/v1/chat/completions"), &header, info))
+	assert.Empty(t, header.Get("User-Agent"))
+	assert.Empty(t, header.Get("originator"))
+	assert.Empty(t, header.Get("x-app"))
+	assert.Empty(t, header.Get("anthropic-beta"))
+}
+
+func TestAdaptorConvertPrependsClaudeCodeIdentity(t *testing.T) {
+	convertToClaude := func(t *testing.T, adaptor *Adaptor, c *gin.Context, info *relaycommon.RelayInfo, converter string) (*dto.ClaudeRequest, error) {
+		t.Helper()
+		var converted any
+		var err error
+		switch converter {
+		case relayconvert.ConverterOpenAIChatToClaudeMessages:
+			converted, err = adaptor.ConvertOpenAIRequest(c, info, &dto.GeneralOpenAIRequest{
+				Model: "claude-test",
+				Messages: []dto.Message{
+					{Role: "system", Content: "System rules."},
+					{Role: "user", Content: "hello"},
+				},
+			})
+		case relayconvert.ConverterOpenAIResponsesToClaudeMessages:
+			converted, err = adaptor.ConvertOpenAIResponsesRequest(c, info, dto.OpenAIResponsesRequest{
+				Model:        "claude-test",
+				Instructions: mustAdvancedCustomRawMessage(t, "System rules."),
+				Input:        mustAdvancedCustomRawMessage(t, "hello"),
+			})
+		case relayconvert.ConverterNone:
+			converted, err = adaptor.ConvertClaudeRequest(c, info, &dto.ClaudeRequest{
+				Model:    "claude-test",
+				System:   "System rules.",
+				Messages: []dto.ClaudeMessage{{Role: "user", Content: "hello"}},
+			})
+		default:
+			return nil, fmt.Errorf("unexpected converter %q", converter)
+		}
+		if err != nil {
+			return nil, err
+		}
+		claudeReq, ok := converted.(*dto.ClaudeRequest)
+		if !ok {
+			return nil, fmt.Errorf("expected *dto.ClaudeRequest, got %T", converted)
+		}
+		return claudeReq, nil
+	}
+
+	tests := []struct {
+		name         string
+		converter    string
+		incomingPath string
+		configure    func(info *relaycommon.RelayInfo)
+	}{
+		{
+			name:         "openai chat completions to claude messages",
+			converter:    relayconvert.ConverterOpenAIChatToClaudeMessages,
+			incomingPath: "/v1/chat/completions",
+		},
+		{
+			name:         "openai responses to claude messages",
+			converter:    relayconvert.ConverterOpenAIResponsesToClaudeMessages,
+			incomingPath: "/v1/responses",
+			configure: func(info *relaycommon.RelayInfo) {
+				info.RelayFormat = types.RelayFormatOpenAIResponses
+				info.RelayMode = relayconstant.RelayModeResponses
+				info.RequestURLPath = "/v1/responses"
+			},
+		},
+		{
+			name:         "native claude messages",
+			converter:    relayconvert.ConverterNone,
+			incomingPath: "/v1/messages",
+			configure: func(info *relaycommon.RelayInfo) {
+				info.RelayFormat = types.RelayFormatClaude
+				info.RequestURLPath = "/v1/messages"
+			},
+		},
+	}
+
+	t.Run("enabled prepends identity as first system block", func(t *testing.T) {
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				adaptor := &Adaptor{}
+				info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+					Routes: []dto.AdvancedCustomRoute{
+						{
+							IncomingPath: tt.incomingPath,
+							UpstreamPath: "/v1/messages",
+							Converter:    tt.converter,
+						},
+					},
+				})
+				if tt.configure != nil {
+					tt.configure(info)
+				}
+				info.ChannelSetting.ClaudeCompatEnabled = true
+
+				claudeReq, err := convertToClaude(t, adaptor, advancedCustomGinContext(tt.incomingPath), info, tt.converter)
+				require.NoError(t, err)
+				blocks, ok := claudeReq.System.([]dto.ClaudeMediaMessage)
+				require.True(t, ok)
+				require.NotEmpty(t, blocks)
+				require.NotNil(t, blocks[0].Text)
+				assert.Equal(t, claudeCodeSystemIdentity, *blocks[0].Text)
+			})
+		}
+	})
+
+	t.Run("disabled leaves system untouched", func(t *testing.T) {
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				adaptor := &Adaptor{}
+				info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+					Routes: []dto.AdvancedCustomRoute{
+						{
+							IncomingPath: tt.incomingPath,
+							UpstreamPath: "/v1/messages",
+							Converter:    tt.converter,
+						},
+					},
+				})
+				if tt.configure != nil {
+					tt.configure(info)
+				}
+
+				claudeReq, err := convertToClaude(t, adaptor, advancedCustomGinContext(tt.incomingPath), info, tt.converter)
+				require.NoError(t, err)
+
+				switch system := claudeReq.System.(type) {
+				case []dto.ClaudeMediaMessage:
+					require.NotEmpty(t, system)
+					require.NotNil(t, system[0].Text)
+					assert.NotEqual(t, claudeCodeSystemIdentity, *system[0].Text)
+				case string:
+					assert.NotEqual(t, claudeCodeSystemIdentity, system)
+				default:
+					t.Fatalf("unexpected system type %T", claudeReq.System)
+				}
+			})
+		}
+	})
 }
 
 func advancedCustomRelayInfo(config *dto.AdvancedCustomConfig) *relaycommon.RelayInfo {

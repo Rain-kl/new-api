@@ -4339,7 +4339,7 @@
     "Setup Two-Factor Authentication": "Setup Two-Factor Authentication",
     "Setup: three groups and one override matrix cell.": "Setup: three groups and one override matrix cell.",
     "Setup: three groups and one override rule.": "Setup: three groups and one override rule.",
-    "Shape Claude Messages requests like the official Claude Code CLI: claude-cli User-Agent, anthropic-beta claude-code-20250219, x-app: cli, and the Claude Code identity line as the first system block. Enable when the gateway only accepts Claude Code clients.": "Shape Claude Messages requests like the official Claude Code CLI: claude-cli User-Agent, anthropic-beta claude-code-20250219, x-app: cli, and the Claude Code identity line as the first system block. Enable when the gateway only accepts Claude Code clients.",
+    "Shape Claude Messages requests like the official Claude Code CLI: claude-cli User-Agent, anthropic-beta claude-code-20250219, x-app: cli, and the Claude Code identity line as the first system block. Targets Claude Messages routes only; do not combine with Simulate Codex client.": "Shape Claude Messages requests like the official Claude Code CLI: claude-cli User-Agent, anthropic-beta claude-code-20250219, x-app: cli, and the Claude Code identity line as the first system block. Targets Claude Messages routes only; do not combine with Simulate Codex client.",
     "Share": "Share",
     "Share your link and earn rewards": "Share your link and earn rewards",
     "Shared configuration for all payment gateways": "Shared configuration for all payment gateways",

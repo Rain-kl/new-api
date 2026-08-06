@@ -4339,7 +4339,7 @@
     "Setup Two-Factor Authentication": "設定雙重身份驗證",
     "Setup: three groups and one override matrix cell.": "設定：三個分組和一個覆蓋矩陣單元格。",
     "Setup: three groups and one override rule.": "設定：三個分組和一條覆蓋規則。",
-    "Shape Claude Messages requests like the official Claude Code CLI: claude-cli User-Agent, anthropic-beta claude-code-20250219, x-app: cli, and the Claude Code identity line as the first system block. Enable when the gateway only accepts Claude Code clients.": "將 Claude Messages 請求塑造成官方 Claude Code CLI 的形式：claude-cli User-Agent、anthropic-beta claude-code-20250219、x-app: cli，並將 Claude Code 身分行作為第一個 system 區塊。當閘道僅接受 Claude Code 用戶端時啟用。",
+    "Shape Claude Messages requests like the official Claude Code CLI: claude-cli User-Agent, anthropic-beta claude-code-20250219, x-app: cli, and the Claude Code identity line as the first system block. Targets Claude Messages routes only; do not combine with Simulate Codex client.": "將 Claude Messages 請求塑造成官方 Claude Code CLI 的形式：claude-cli User-Agent、anthropic-beta claude-code-20250219、x-app: cli，並將 Claude Code 身分行作為第一個 system 區塊。僅適用於 Claude Messages 路由；請勿與「模擬 Codex 用戶端」同時開啟。",
     "Share": "佔比",
     "Share your link and earn rewards": "分享您的連結並賺取獎勵",
     "Shared configuration for all payment gateways": "所有支付閘道的共享設定",
