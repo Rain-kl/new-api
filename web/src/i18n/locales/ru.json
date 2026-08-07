@@ -3774,6 +3774,7 @@
     "Raw expression": "Исходное выражение",
     "Raw JSON": "Сырой JSON",
     "Raw Quota": "Исходная квота",
+    "Raw request body stored for this log entry": "Исходное тело запроса, сохраненное для этой записи журнала",
     "Raw response": "Исходный ответ",
     "Re-enable on success": "Повторно включить при успехе",
     "Re-login": "Повторный вход",

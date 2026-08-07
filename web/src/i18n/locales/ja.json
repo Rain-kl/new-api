@@ -3774,6 +3774,7 @@
     "Raw expression": "元の式",
     "Raw JSON": "生 JSON",
     "Raw Quota": "元のクォータ",
+    "Raw request body stored for this log entry": "このログエントリ用に保存された生のリクエストボディ",
     "Raw response": "生の応答",
     "Re-enable on success": "成功時に再有効化",
     "Re-login": "再ログイン",

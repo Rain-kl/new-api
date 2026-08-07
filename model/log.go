@@ -323,6 +323,8 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}
+	// Stable hook site for personal patches (conversation record, etc.).
+	runAfterConsumeLogHooks(c, log, userId, requestId)
 }
 
 type RecordConsumeLogParams struct {

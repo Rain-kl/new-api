@@ -88,7 +88,7 @@ export function ConversationDialog({
       open={open}
       onOpenChange={onOpenChange}
       title={t('Conversation content')}
-      description={t('Raw request body stored for this consume log')}
+      description={t('Raw request body stored for this log entry')}
       contentClassName='sm:max-w-2xl'
       contentHeight='auto'
       bodyClassName='space-y-3'

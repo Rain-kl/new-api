@@ -3774,6 +3774,7 @@
     "Raw expression": "原始表达式",
     "Raw JSON": "原始 JSON",
     "Raw Quota": "原生额度",
+    "Raw request body stored for this log entry": "为此日志条目存储的原始请求体",
     "Raw response": "原始回复",
     "Re-enable on success": "成功后重新启用",
     "Re-login": "重新登录",

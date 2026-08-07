@@ -3774,6 +3774,7 @@
     "Raw expression": "Expression brute",
     "Raw JSON": "JSON brut",
     "Raw Quota": "Quota brut",
+    "Raw request body stored for this log entry": "Corps de requête brut enregistré pour cette entrée de journal",
     "Raw response": "Reponse brute",
     "Re-enable on success": "Réactiver en cas de succès",
     "Re-login": "Se reconnecter",

@@ -490,6 +490,8 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const isViolation = isViolationFeeLog(other)
   const isRefund = props.log.type === 6
   const isConsume = props.log.type === 2
+  const isError = props.log.type === 5
+  const canShowConversation = isConsume || isError
   const isTopup = props.log.type === 1
   const isManage = props.log.type === 3
   const isSubscription = other?.billing_source === 'subscription'
@@ -1078,8 +1080,8 @@ export function DetailsDialog(props: DetailsDialogProps) {
           />
         )}
 
-        {/* Personal: conversation content (admin + consume only) */}
-        {props.isAdmin && isConsume && (
+        {/* Personal: conversation content (admin + consume/error logs) */}
+        {props.isAdmin && canShowConversation && (
           <DetailRow
             label={t('Conversation')}
             value={
@@ -1277,7 +1279,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
         )}
       </div>
     </Dialog>
-      {props.isAdmin && isConsume && (
+      {props.isAdmin && canShowConversation && (
         <ConversationDialog
           logId={props.log.id}
           open={conversationOpen}
