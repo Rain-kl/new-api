@@ -130,6 +130,9 @@ func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayIn
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
+	if info != nil && info.ChannelSetting.CodexCompatEnabled {
+		ApplyCodexInstructions(&request)
+	}
 	converter, err := a.resolveForConversion(c, info)
 	if err != nil {
 		return nil, err

@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relay/channel"
+	"github.com/QuantumNous/new-api/relay/channel/advancedcustom"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -91,10 +92,8 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		}
 	}
 	// Codex backend requires the `instructions` field to be present.
-	// Keep it consistent with Codex CLI behavior by defaulting to an empty string.
-	if len(request.Instructions) == 0 {
-		request.Instructions = json.RawMessage(`""`)
-	}
+	// Inject model-based Codex instructions if instructions is empty.
+	advancedcustom.ApplyCodexInstructions(&request)
 
 	if isCompact {
 		return request, nil
