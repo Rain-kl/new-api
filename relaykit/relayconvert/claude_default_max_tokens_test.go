@@ -101,7 +101,10 @@ func TestClaudeThinkingAdapterSatisfiesMaxTokensWithoutCallback(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, got.MaxTokens)
-	assert.Equal(t, uint(1280), *got.MaxTokens)
+	assert.Equal(t, uint(4096), *got.MaxTokens)
+	require.NotNil(t, got.Thinking)
+	assert.Equal(t, "enabled", got.Thinking.Type)
+	assert.Equal(t, 2048, got.Thinking.GetBudgetTokens())
 }
 
 func claudeDefaultsMeta(defaultMaxTokens func(string) int) convmeta.Meta {

@@ -393,7 +393,11 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 			content.Role = "model"
 		}
 		if len(content.Parts) > 0 {
-			geminiRequest.Contents = append(geminiRequest.Contents, content)
+			if n := len(geminiRequest.Contents); n > 0 && geminiRequest.Contents[n-1].Role == content.Role && !hasGeminiFunctionResponse(geminiRequest.Contents[n-1].Parts) {
+				geminiRequest.Contents[n-1].Parts = append(geminiRequest.Contents[n-1].Parts, content.Parts...)
+			} else {
+				geminiRequest.Contents = append(geminiRequest.Contents, content)
+			}
 		}
 	}
 
@@ -408,4 +412,13 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 	}
 
 	return &geminiRequest, nil
+}
+
+func hasGeminiFunctionResponse(parts []dto.GeminiPart) bool {
+	for _, p := range parts {
+		if p.FunctionResponse != nil {
+			return true
+		}
+	}
+	return false
 }

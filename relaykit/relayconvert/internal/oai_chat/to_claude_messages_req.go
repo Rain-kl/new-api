@@ -161,8 +161,8 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 			claudeRequest.TopP = nil
 			claudeRequest.TopK = nil
 		} else {
-			if claudeRequest.MaxTokens == nil || *claudeRequest.MaxTokens < 1280 {
-				claudeRequest.MaxTokens = kitutil.GetPointer[uint](1280)
+			if claudeRequest.MaxTokens == nil || *claudeRequest.MaxTokens < 4096 {
+				claudeRequest.MaxTokens = kitutil.GetPointer[uint](4096)
 			}
 
 			claudeRequest.Thinking = &dto.Thinking{
@@ -209,6 +209,33 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 				Type:         "enabled",
 				BudgetTokens: &budgetTokens,
 			}
+		}
+	}
+
+	if claudeRequest.Thinking != nil {
+		if claudeRequest.Thinking.Type == "enabled" {
+			budget := claudeRequest.Thinking.GetBudgetTokens()
+			if claudeRequest.MaxTokens != nil && *claudeRequest.MaxTokens > 0 {
+				ceiling := int(*claudeRequest.MaxTokens) / 2
+				if ceiling > 0 && budget > ceiling {
+					budget = ceiling
+				}
+			}
+			if budget < 1024 {
+				claudeRequest.Thinking = nil
+				claudeRequest.Temperature = textRequest.Temperature
+				claudeRequest.TopP = textRequest.TopP
+				claudeRequest.TopK = textRequest.TopK
+			} else {
+				claudeRequest.Thinking.BudgetTokens = kitutil.GetPointer(budget)
+				claudeRequest.Temperature = nil
+				claudeRequest.TopP = nil
+				claudeRequest.TopK = nil
+			}
+		} else {
+			claudeRequest.Temperature = nil
+			claudeRequest.TopP = nil
+			claudeRequest.TopK = nil
 		}
 	}
 
