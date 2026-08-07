@@ -16,7 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import ReactJson from '@microlink/react-json-view'
 import { Check, Copy, Loader2 } from 'lucide-react'
+import { useTheme } from 'next-themes'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -38,6 +40,7 @@ export function ConversationDialog({
   onOpenChange,
 }: ConversationDialogProps) {
   const { t } = useTranslation()
+  const { resolvedTheme } = useTheme()
   const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
   const [loading, setLoading] = useState(false)
   const [content, setContent] = useState<string | null>(null)
@@ -74,14 +77,33 @@ export function ConversationDialog({
     }
   }, [open, logId, t])
 
-  const formatted = useMemo(() => {
-    if (!content) return ''
+  const parsedJson = useMemo(() => {
+    if (!content) return null
     try {
-      return JSON.stringify(JSON.parse(content), null, 2)
+      const parsed = JSON.parse(content)
+      if (typeof parsed === 'object' && parsed !== null) {
+        return parsed
+      }
+      return null
     } catch {
-      return content
+      return null
     }
   }, [content])
+
+  const formatted = useMemo(() => {
+    if (!content) return ''
+    if (parsedJson) {
+      try {
+        return JSON.stringify(parsedJson, null, 2)
+      } catch {
+        return content
+      }
+    }
+    return content
+  }, [content, parsedJson])
+
+  const isDark = resolvedTheme === 'dark'
+  const jsonTheme = isDark ? 'ocean' : 'rsuite'
 
   return (
     <Dialog
@@ -105,7 +127,7 @@ export function ConversationDialog({
           <Button
             variant='ghost'
             size='sm'
-            className='absolute top-2 right-2 h-8 w-8 p-0'
+            className='absolute top-2 right-2 z-10 h-8 w-8 p-0'
             onClick={() => copyToClipboard(formatted)}
             title={t('Copy to clipboard')}
           >
@@ -115,9 +137,24 @@ export function ConversationDialog({
               <Copy className='size-4' />
             )}
           </Button>
-          <pre className='max-h-[50vh] overflow-auto pr-10 text-xs leading-relaxed break-words whitespace-pre-wrap'>
-            {formatted}
-          </pre>
+          {parsedJson ? (
+            <div className='max-h-[50vh] overflow-auto pr-10 text-xs'>
+              <ReactJson
+                src={parsedJson}
+                collapsed={true}
+                theme={jsonTheme}
+                displayDataTypes={false}
+                displayObjectSize={true}
+                name={false}
+                enableClipboard={false}
+                style={{ backgroundColor: 'transparent' }}
+              />
+            </div>
+          ) : (
+            <pre className='max-h-[50vh] overflow-auto pr-10 text-xs leading-relaxed break-words whitespace-pre-wrap'>
+              {content}
+            </pre>
+          )}
         </div>
       ) : (
         <p className='text-muted-foreground py-4 text-sm'>
