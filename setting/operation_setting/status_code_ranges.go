@@ -16,12 +16,14 @@ type StatusCodeRange struct {
 
 var AutomaticDisableStatusCodeRanges = []StatusCodeRange{{Start: 401, End: 401}}
 
-// Default behavior matches legacy hardcoded retry rules in controller/relay.go shouldRetry:
-// retry for 1xx, 3xx, 4xx(except 400/408), 5xx(except 504/524), and no retry for 2xx.
+// Default ranges for the model-redirect hop cooldown (shouldCoolModelRedirectHop).
+// The main relay retry path (controller/relay.go shouldRetry) no longer consults
+// these: any non-2xx upstream error is retryable there. These ranges cover 1xx,
+// 3xx, 4xx (except 408), 5xx (except 504/524), and exclude 2xx.
 var AutomaticRetryStatusCodeRanges = []StatusCodeRange{
 	{Start: 100, End: 199},
 	{Start: 300, End: 399},
-	{Start: 401, End: 407},
+	{Start: 400, End: 407},
 	{Start: 409, End: 499},
 	{Start: 500, End: 503},
 	{Start: 505, End: 523},

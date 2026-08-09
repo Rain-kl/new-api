@@ -498,29 +498,14 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	}
 	code := openaiErr.StatusCode
 	if code >= 200 && code < 300 {
+		// 2xx means the upstream handled the request successfully; nothing to retry.
 		return false
 	}
-	if code < 100 || code > 599 {
-		return true
-	}
-	if operation_setting.IsAlwaysSkipRetryCode(openaiErr.GetErrorCode()) {
-		return false
-	}
-	// Personal model-redirect HA: from the end-user's view, any failed hop is just
-	// "this priority is unavailable" — including upstream 401/403 (bad key / no
-	// permission on that channel). Prefer the next priority over surfacing the error.
-	// These codes are from new-api → upstream, not client → new-api auth.
-	if common.GetContextKeyBool(c, constant.ContextKeyModelRedirectActive) {
-		if code == http.StatusUnauthorized || // 401
-			code == http.StatusForbidden || // 403
-			code == http.StatusNotFound ||
-			code == http.StatusTooManyRequests ||
-			code == http.StatusRequestTimeout ||
-			code >= http.StatusInternalServerError {
-			return true
-		}
-	}
-	return operation_setting.ShouldRetryByStatusCode(code)
+	// Any upstream error is retryable: 400 invalid request, 4xx, 5xx, timeouts,
+	// unparseable response bodies, etc. — the failure came from the upstream, so
+	// try the next channel. Local/client-side failures are already excluded above
+	// via skip-retry errors, and the retry budget / specific-channel guards apply.
+	return true
 }
 
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
@@ -795,31 +780,13 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *taskdto.TaskEr
 	if _, ok := c.Get("specific_channel_id"); ok {
 		return false
 	}
-	if taskErr.StatusCode == http.StatusTooManyRequests {
-		return true
-	}
-	if taskErr.StatusCode == 307 {
-		return true
-	}
-	if taskErr.StatusCode/100 == 5 {
-		// 超时不重试
-		if operation_setting.IsAlwaysSkipRetryStatusCode(taskErr.StatusCode) {
-			return false
-		}
-		return true
-	}
-	if taskErr.StatusCode == http.StatusBadRequest {
-		return false
-	}
-	if taskErr.StatusCode == 408 {
-		// azure处理超时不重试
-		return false
-	}
 	if taskErr.LocalError {
 		return false
 	}
 	if taskErr.StatusCode/100 == 2 {
 		return false
 	}
+	// Any upstream error (400 invalid request, 408 timeout, 4xx, 5xx incl.
+	// 504/524) is retryable: try the next channel.
 	return true
 }
