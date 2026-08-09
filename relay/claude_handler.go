@@ -320,8 +320,7 @@ func ClaudeCountTokensHelper(c *gin.Context, info *relaycommon.RelayInfo) *types
 		if err != nil {
 			return types.NewClaudeError(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
-		info.UpstreamRequestBodySize = storage.Size()
-		requestBody = common.ReaderOnly(storage)
+		requestBody = common.NewReplayableBodyReader(storage)
 	} else {
 		convertedRequest, err := countTokensAdaptor.ConvertClaudeCountTokensRequest(c, info, request)
 		if err != nil {
@@ -345,12 +344,12 @@ func ClaudeCountTokensHelper(c *gin.Context, info *relaycommon.RelayInfo) *types
 		}
 
 		logger.LogDebug(c, "requestBody: %s", jsonData)
-		body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+		body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 		if err != nil {
 			return types.NewClaudeError(err, types.ErrorCodeConvertRequestFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
 		defer closer.Close()
-		info.UpstreamRequestBodySize = size
+		jsonData = nil
 		requestBody = body
 	}
 
