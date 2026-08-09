@@ -119,6 +119,28 @@ func TestAdaptorSetupRequestHeaderUsesDefaultBearerAuth(t *testing.T) {
 	assert.Equal(t, "Bearer sk-test", header.Get("Authorization"))
 }
 
+func TestAdaptorSetupRequestHeaderClaudeFormatDefaultAuthUsesXApiKey(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{
+			{
+				IncomingPath: "/v1/messages",
+				UpstreamPath: "https://upstream.example/v1/messages",
+				Converter:    relayconvert.ConverterNone,
+			},
+		},
+	})
+	info.RelayFormat = types.RelayFormatClaude
+	c := advancedCustomGinContext("/v1/messages")
+	header := http.Header{}
+
+	require.NoError(t, adaptor.SetupRequestHeader(c, &header, info))
+	// Anthropic-compatible upstreams read x-api-key, not Authorization: Bearer.
+	assert.Empty(t, header.Get("Authorization"))
+	assert.Equal(t, "sk-test", header.Get("x-api-key"))
+	assert.Equal(t, "2023-06-01", header.Get("anthropic-version"))
+}
+
 func TestAdaptorSetupRequestHeaderUsesConfiguredHeaderAuth(t *testing.T) {
 	adaptor := &Adaptor{}
 	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{

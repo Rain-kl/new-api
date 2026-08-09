@@ -278,8 +278,17 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *
 
 	channel.SetupApiRequestHeader(info, c, header)
 	auth := a.route.Auth
+	claudeFormat := shouldApplyClaudeHeaders(a.converter, info)
 	if auth == nil {
-		header.Set("Authorization", "Bearer "+info.ApiKey)
+		if claudeFormat {
+			// Anthropic-compatible upstreams (native Claude passthrough and
+			// converters producing Claude messages) authenticate via x-api-key,
+			// not Authorization: Bearer — the key must go in the header the
+			// upstream actually reads, otherwise it answers 401 "Missing API key".
+			header.Set("x-api-key", info.ApiKey)
+		} else {
+			header.Set("Authorization", "Bearer "+info.ApiKey)
+		}
 	} else {
 		switch strings.TrimSpace(auth.Type) {
 		case dto.AdvancedCustomAuthTypeNone:
