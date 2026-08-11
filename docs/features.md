@@ -168,7 +168,9 @@
 | `service/openai_chat_responses_mode.go` skip 检查 | 低 | 函数开头 |
 | `router/api-router.go` 2 条路由 + model_redirect 路由组 | 中 | 路由文件常改，但行少 |
 | `common/constants.go` / `model/option.go` 配置项 | 中 | 邻近开关常有新增 |
+| `common/utils.go` `NormalizeRelaySelectionPath` | 低 | 尾部追加新函数；`distributor.go` 选渠道入口引用一行 |
 | 前端 `channels/constants.ts` `1000` 项 | 低 | map 尾部 |
+| 前端 `channel-favicon.tsx` | 低 | 新文件；`channels-columns.tsx` 导入一行 |
 | 前端 log-settings / details-dialog | 中 | UI 重构时需重挂，逻辑在独立 dialog 文件 |
 
 ### 2026-08 合并复盘（upstream auto-group 等）
@@ -478,7 +480,99 @@ Auth 仍为 `Authorization: Bearer <channel.key>`；路径仍以 `/v1/responses`
 
 ---
 
-## 近期增量索引（2026-08-03 ~ 2026-08-07）
+## 十一、模型重定向：模型映射模式（2026-08-11）
+
+### 需求背景
+
+优先级重定向（§三）的目标是「渠道 + 模型」，渠道调整后需要逐个重配。新增**模型映射**模式：虚拟模型映射到目标模型名，由**渠道层按模型自动选渠道**，渠道增减无需改配置。两种模式按虚拟模型独立选择，且**切换模式不丢失另一模式的配置**（非破坏性）。
+
+### 数据模型
+
+`model_redirects` 新增两列（AutoMigrate，`RegisterMainDBModel`）：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `mode` | varchar(16) | `redirect`（默认）/ `mapping` |
+| `mapping_target` | varchar(128) | 映射模式的目标模型名 |
+
+- 非破坏性更新：mode=mapping 时只写 `mapping_target`，渠道链 targets 原样保留；mode=redirect 时反向同样。
+- 校验：映射目标必填、≤128 字符、无逗号/控制空白；若命中已有虚拟模型须为启用；**映射边参与环检测**（`a→b→a` 与自引用在保存时拒绝）。
+
+### 运行时：递归解析 + 纯模型候选
+
+- 映射条目解析为**纯模型候选**（`RedirectCandidate.ChannelID==0`），渠道由渠道层按模型选取。
+- 映射目标不是终止节点：重新查虚拟模型列表继续解析，直至结果不在列表（普通渠道路由）或命中重定向链：
+  - `映射→映射`：继续映射（a→b→c 链）
+  - `映射→重定向`：走重定向优先级链
+  - `重定向→映射`：嵌套引用映射条目 → 纯模型候选（继承 sentinel 优先级）
+- 重试槽位 walk（`model.ResolveRedirectSlot`）：渠道绑定候选占 1 槽；纯模型候选占 `RetryTimes+1` 槽（复用 `GetRandomSatisfiedChannel` 的渠道优先级档），档位用尽再降级下一候选；`maxRetry = max(RetryTimes, len-1 + 纯模型数×RetryTimes)`。
+- 计费 / 广场 / 日志：`ModelRedirectDisplaySourceModel` 对映射条目返回 `mapping_target`；plaza / ListModels 自动可见；日志 `model_redirect_attempt` = 映射目标。
+- 上下文新增 `ContextKeyModelRedirectGroup`（`constant/personal.go`）：重试槽位 walk 选渠道所需的有效分组。
+
+### Admin / 前端
+
+- `/models/redirect` 每条可切「模型映射 / 模型重定向」模式；映射模式只填「映射到（目标模型名）」。
+- 表格新增「模式」徽标列；映射行目标列显示 `→ 映射目标`。
+
+### 同日修复
+
+| 问题 | 根因 | 修复 |
+|------|------|------|
+| 优先级目标「启用」开关关闭不生效 | `Enabled bool gorm:"default:true"` 让 GORM 在 Create 时跳过 `false` 零值，落库为启用 | 移除 `ModelRedirectTarget.Enabled` 的 default 标签（默认值由 `buildTargetsFromInput` 代码强制） |
+| 新建「禁用」条目不生效 | 同上，`ModelRedirect.Enabled` | 移除父表 `Enabled` 的 default 标签 |
+| 新增目标默认优先级 | 旧逻辑 `max + 10`（新目标变最高优先） | 改为 `min - 10`（新目标作为更低降级档），下限 1 |
+
+### 关键文件
+
+| 文件 | 说明 |
+|------|------|
+| `model/model_redirect.go` | `mode`/`mapping_target` 字段、递归解析、纯模型候选、槽位 walk、校验/CRUD、显示辅助 |
+| `model/model_redirect_cooldown.go` | 过滤器保留纯模型候选 |
+| `middleware/model_redirect.go` | 首选取（含纯模型选渠道）+ 裁剪重试列表 |
+| `controller/relay.go` | 槽位 walk 重试 + maxRetry 公式 |
+| `constant/personal.go` | `ContextKeyModelRedirectGroup` |
+| `web/src/features/models/*` | 模式切换抽屉 + 徽标列 |
+
+---
+
+## 十二、Playground 路径归一化：高级自定义渠道选渠道（2026-08-11）
+
+### 问题
+
+`/pg/chat/completions` 请求在 **Distribute 选渠道阶段**使用原始路径，而 Advanced Custom（type=58）渠道按**精确路径**匹配路由（如 `/v1/chat/completions`），导致 playground 请求在所有高级自定义渠道上「无可用渠道」。`GenRelayInfo` 只在 relay 阶段归一化上游路径，选渠道阶段此前未归一化。
+
+### 修复
+
+| 点 | 说明 |
+|----|------|
+| `common.NormalizeRelaySelectionPath` | `/pg/...` → `/v1/...`（非 playground 原样返回） |
+| `middleware/distributor.go` | 选渠道入口计算 `selectionPath`，传入重定向 / 亲和 / `CacheGetRandomSatisfiedChannel`；**不改 `c.Request.URL.Path`**（`IsPlayground` 计费标志依赖原始路径） |
+| `controller/relay.go` | 重试参数与 `ResolveRedirectSlot` 同样归一化 |
+
+### 关键文件
+
+`common/utils.go`、`common/utils_test.go`、`middleware/distributor.go`、`controller/relay.go`。
+
+---
+
+## 十三、渠道名称列上游 favicon（2026-08-11）
+
+### 行为
+
+渠道名称前显示上游网站图标（`https://favicon.im`），便于在渠道很多时快速识别归属。
+
+- 从渠道 `base_url` 提取域名 → `https://a.favicon.im/{domain}`
+- `loading="lazy"`，`onError` 自动隐藏；跳过 localhost / IP 字面量
+- 敏感掩码开启（名称显示 `••••`）时不显示图标
+- 表格与卡片布局均生效（卡片复用名称列渲染器）
+
+### 关键文件
+
+`web/src/features/channels/components/channel-favicon.tsx`（**新**）、`web/src/features/channels/components/channels-columns.tsx`。
+
+---
+
+## 近期增量索引（2026-08-03 ~ 2026-08-11）
 
 | 日期 | 主题 | 章节 |
 |------|------|------|
@@ -489,5 +583,8 @@ Auth 仍为 `Authorization: Bearer <channel.key>`；路径仍以 `/v1/responses`
 | 08-05 | Sub2API Codex 兼容层（已移除） | §五 |
 | 08-05 | Sub2API CC→Responses 渠道开关（已移除） | §六 |
 | 08-07 | Advanced Custom 模拟 Codex / Claude Code 客户端 | §十 |
+| 08-11 | 模型重定向：模型映射模式 + 同日修复 | §十一 |
+| 08-11 | Playground 路径归一化（高级自定义选渠道） | §十二 |
+| 08-11 | 渠道名称列上游 favicon | §十三 |
 
 > 更细的 Codex 设计/任务拆分以 `docs/superpowers/` 下 2026-08-05 / 2026-08-06 文档为准；本文只记落地行为与文件面。
