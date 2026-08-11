@@ -77,6 +77,7 @@ import {
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import type { Channel } from '../types'
+import { ChannelFavicon } from './channel-favicon'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
 import { useChannels } from './channels-provider'
 import { DataTableRowActions } from './data-table-row-actions'
@@ -657,6 +658,7 @@ export function useChannelsColumns(
 
           return (
             <div className='flex max-w-full min-w-0 items-center gap-2'>
+              {sensitiveVisible && <ChannelFavicon baseUrl={channel.base_url} />}
               <div className='flex max-w-full min-w-0 flex-col gap-1'>
                 <div className='flex max-w-full min-w-0 items-center gap-1.5'>
                   <TruncatedText
