@@ -136,8 +136,11 @@ function emptyTarget(priority = 100): TargetDraft {
 
 function nextDefaultPriority(targets: TargetDraft[]): number {
   if (targets.length === 0) return 100
-  const max = Math.max(...targets.map((t) => t.priority || 0))
-  return max + 10
+  // New targets default to a lower-priority tier: 10 below the current lowest,
+  // so each added row becomes a further fallback (higher number = preferred).
+  const min = Math.min(...targets.map((t) => t.priority || 0))
+  const next = min - 10
+  return next < 1 ? 1 : next
 }
 
 const MAX_PRIORITY = 1_000_000
