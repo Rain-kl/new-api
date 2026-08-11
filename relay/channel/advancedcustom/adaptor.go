@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
@@ -432,12 +433,16 @@ func (a *Adaptor) resolve(c *gin.Context, info *relaycommon.RelayInfo) error {
 
 func incomingRequestPath(c *gin.Context, info *relaycommon.RelayInfo) string {
 	if c != nil && c.Request != nil && c.Request.URL != nil {
-		return c.Request.URL.Path
+		// The playground (/pg/chat/completions) is the same OpenAI chat API as
+		// /v1/chat/completions; normalize for route matching, mirroring both
+		// GenRelayInfo's upstream-path normalization and the selection-phase
+		// normalization in Distribute.
+		return common.NormalizeRelaySelectionPath(c.Request.URL.Path)
 	}
 	if info == nil {
 		return ""
 	}
-	return strings.Split(info.RequestURLPath, "?")[0]
+	return strings.Split(common.NormalizeRelaySelectionPath(info.RequestURLPath), "?")[0]
 }
 
 func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {

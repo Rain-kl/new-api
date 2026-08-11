@@ -208,6 +208,40 @@ func TestAdaptorReturnsErrorWhenNoRouteMatchesPath(t *testing.T) {
 	assert.Contains(t, err.Error(), "does not support request path")
 }
 
+func TestAdaptorResolvePlaygroundPathMatchesOpenAIChatRoute(t *testing.T) {
+	// Playground requests (/pg/chat/completions) are the same OpenAI chat API as
+	// /v1/chat/completions; incomingRequestPath must normalize so the route matches
+	// (mirroring Distribute's selection-phase normalization).
+	adaptor := &Adaptor{}
+	c := advancedCustomGinContext("/pg/chat/completions")
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{
+			{
+				IncomingPath: "/v1/chat/completions",
+				UpstreamPath: "https://upstream.example/v1/chat/completions",
+				Converter:    relayconvert.ConverterNone,
+			},
+		},
+	})
+	require.NoError(t, adaptor.resolve(c, info), "playground path must match the /v1/chat/completions route")
+	assert.Equal(t, "/v1/chat/completions", adaptor.route.IncomingPath)
+
+	// A different route must still not match the playground path (fresh adaptor:
+	// resolve caches its result on the instance).
+	badAdaptor := &Adaptor{}
+	bad := advancedCustomGinContext("/pg/chat/completions")
+	badInfo := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{
+			{
+				IncomingPath: "/v1/responses",
+				UpstreamPath: "https://upstream.example/v1/responses",
+				Converter:    relayconvert.ConverterNone,
+			},
+		},
+	})
+	require.Error(t, badAdaptor.resolve(bad, badInfo), "a different route must still not match the playground path")
+}
+
 func TestAdaptorReplacesModelPlaceholderInRouteURL(t *testing.T) {
 	adaptor := &Adaptor{}
 	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
