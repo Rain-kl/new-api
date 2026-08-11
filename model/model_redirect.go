@@ -17,7 +17,10 @@ type ModelRedirect struct {
 	Id            int                   `json:"id" gorm:"primaryKey;autoIncrement"`
 	Name          string                `json:"name" gorm:"size:128;uniqueIndex;not null"` // virtual model name
 	Groups        string                `json:"groups" gorm:"type:text"`                   // comma-separated
-	Enabled       bool                  `json:"enabled" gorm:"default:true"`
+	// No gorm default tag on Enabled: the `default:true` tag makes GORM omit the
+	// false zero value on Create (stored as enabled). The true default is enforced
+	// in CreateModelRedirect / UpdateModelRedirect, so the tag is unnecessary.
+	Enabled       bool                  `json:"enabled"`
 	Remark        string                `json:"remark" gorm:"type:varchar(255);default:''"`
 	Mode          string                `json:"mode" gorm:"size:16;default:redirect"`      // "redirect" | "mapping"
 	MappingTarget string                `json:"mapping_target" gorm:"size:128;default:''"` // mapping-mode target model name

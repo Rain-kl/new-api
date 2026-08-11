@@ -630,6 +630,29 @@ func TestModelRedirectTarget_EnabledRoundTrip(t *testing.T) {
 	assert.Equal(t, 90, cands[0].Priority)
 }
 
+func TestCreateModelRedirect_DisabledEntryStaysDisabled(t *testing.T) {
+	setupModelRedirectTestDB(t)
+	require.NoError(t, DB.Create(&Channel{Id: 9102, Name: "c2", Type: 1, Key: "k2", Models: "gpt-4o"}).Error)
+	t.Cleanup(func() {
+		_ = DB.Where("id = ?", 9102).Delete(&Channel{}).Error
+	})
+
+	created, err := CreateModelRedirect(&ModelRedirectInput{
+		Name: "off", Groups: []string{"default"}, Enabled: common.GetPointer(false),
+		Mode: ModelRedirectModeRedirect,
+		Targets: []ModelRedirectTargetInput{
+			{ChannelId: 9102, Model: "gpt-4o", Priority: 100, Enabled: common.GetPointer(true)},
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, created.Enabled, "disabled entry must be stored disabled on create")
+
+	require.NoError(t, LoadModelRedirectCache())
+	if _, ok := ResolveModelRedirect("off", "default"); ok {
+		t.Fatal("disabled entry must not resolve")
+	}
+}
+
 func TestResolveModelRedirect_MappingDirect(t *testing.T) {
 	modelRedirectCacheMu.Lock()
 	modelRedirectCache = map[string]*modelRedirectCacheEntry{
