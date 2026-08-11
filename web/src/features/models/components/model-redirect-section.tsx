@@ -894,59 +894,13 @@ function ModelRedirectDrawer(props: {
           </SheetTitle>
           <SheetDescription>
             {isEdit
-              ? '修改虚拟模型配置（映射或优先级重定向），完成后保存。切换模式不会丢失另一模式的配置。'
+              ? '修改虚拟模型配置（映射或优先级重定向）。'
               : '创建虚拟模型：可配置为模型映射（路由到目标模型名）或优先级重定向（路由到指定渠道）。'}
           </SheetDescription>
         </SheetHeader>
 
         <div className={sideDrawerFormClassName()}>
-          <SideDrawerSection>
-            <div className='space-y-2'>
-              <Label>模式</Label>
-              <RadioGroup
-                value={mode}
-                onValueChange={(v) => setMode(v as ModelRedirectMode)}
-                className='grid grid-cols-2 gap-4'
-              >
-                <div className='flex items-center space-x-2'>
-                  <RadioGroupItem
-                    value={MODEL_REDIRECT_MODE_MAPPING}
-                    id='mode-mapping'
-                  />
-                  <Label htmlFor='mode-mapping'>模型映射</Label>
-                </div>
-                <div className='flex items-center space-x-2'>
-                  <RadioGroupItem
-                    value={MODEL_REDIRECT_MODE_REDIRECT}
-                    id='mode-redirect'
-                  />
-                  <Label htmlFor='mode-redirect'>模型重定向</Label>
-                </div>
-              </RadioGroup>
-              <p className='text-muted-foreground text-xs'>
-                {mode === MODEL_REDIRECT_MODE_MAPPING
-                  ? '将虚拟模型名映射为目标模型名，由渠道层自动路由；切换模式不会丢失另一模式的配置。'
-                  : '按优先级将虚拟模型分发到指定渠道；切换模式不会丢失另一模式的配置。'}
-              </p>
-            </div>
-          </SideDrawerSection>
 
-          {mode === MODEL_REDIRECT_MODE_MAPPING && (
-            <SideDrawerSection>
-              <div className='space-y-2'>
-                <Label>映射到（目标模型名）*</Label>
-                <Input
-                  value={mappingTarget}
-                  onChange={(e) => setMappingTarget(e.target.value)}
-                  placeholder='gpt-5.6'
-                  className='font-mono'
-                />
-                <p className='text-muted-foreground text-xs'>
-                  客户端请求此虚拟模型名时，流量按该目标模型名自动路由到提供此模型的渠道；也可填写另一个虚拟模型名以继续解析。
-                </p>
-              </div>
-            </SideDrawerSection>
-          )}
 
           <SideDrawerSection>
             <h3 className='text-sm font-semibold'>基本信息</h3>
@@ -956,7 +910,7 @@ function ModelRedirectDrawer(props: {
               <Input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder='model'
+                placeholder='输入模型'
                 className='font-mono'
               />
               <p className='text-muted-foreground text-xs'>
@@ -993,17 +947,58 @@ function ModelRedirectDrawer(props: {
               />
             </div>
           </SideDrawerSection>
+          <SideDrawerSection>
+            <div className='space-y-2'>
+              <Label>模式</Label>
+              <RadioGroup
+                  value={mode}
+                  onValueChange={(v) => setMode(v as ModelRedirectMode)}
+                  className='grid grid-cols-2 gap-4'
+              >
+                <div className='flex items-center space-x-2'>
+                  <RadioGroupItem
+                      value={MODEL_REDIRECT_MODE_MAPPING}
+                      id='mode-mapping'
+                  />
+                  <Label htmlFor='mode-mapping'>模型映射</Label>
+                </div>
+                <div className='flex items-center space-x-2'>
+                  <RadioGroupItem
+                      value={MODEL_REDIRECT_MODE_REDIRECT}
+                      id='mode-redirect'
+                  />
+                  <Label htmlFor='mode-redirect'>模型重定向</Label>
+                </div>
+              </RadioGroup>
+              <p className='text-muted-foreground text-xs'>
+                {mode === MODEL_REDIRECT_MODE_MAPPING
+                    ? '将虚拟模型名映射为目标模型名，由渠道层自动路由。'
+                    : '按优先级将虚拟模型分发到指定渠道。'}
+              </p>
+            </div>
+          </SideDrawerSection>
 
+          {mode === MODEL_REDIRECT_MODE_MAPPING && (
+              <SideDrawerSection>
+                <div className='space-y-2'>
+                  <Label>映射到（目标模型名）*</Label>
+                  <Input
+                      value={mappingTarget}
+                      onChange={(e) => setMappingTarget(e.target.value)}
+                      placeholder='输入映射名'
+                      className='font-mono'
+                  />
+                  <p className='text-muted-foreground text-xs'>
+                    客户端请求此虚拟模型名时，流量按该目标模型名自动路由到提供此模型的渠道；也可填写另一个虚拟模型名以继续解析。
+                  </p>
+                </div>
+              </SideDrawerSection>
+          )}
           {mode === MODEL_REDIRECT_MODE_REDIRECT && (
             <SideDrawerSection>
               <div className='flex items-center justify-between gap-2'>
                 <div>
                   <h3 className='text-sm font-semibold'>优先级目标</h3>
-                  <p className='text-muted-foreground text-xs'>
-                    每行 = 一个渠道上的一次尝试。优先级越大越优先；相同优先级在
-                    <span className='font-medium'>不同渠道</span>
-                    之间负载均衡。模型从该渠道已配置列表中单选，不选则透传虚拟名。
-                </p>
               </div>
               <Button
                 type='button'
@@ -1165,9 +1160,6 @@ function RedirectTargetCard(props: {
               })
             }}
           />
-          <p className='text-muted-foreground text-xs'>
-            数值越大越优先；相同数值在不同渠道间负载均衡
-          </p>
         </div>
 
         <div className='space-y-2'>
@@ -1249,11 +1241,6 @@ function RedirectTargetCard(props: {
             ))}
           </SelectContent>
         </Select>
-        <p className='text-muted-foreground text-xs'>
-          {isNested
-            ? '从其他已启用的虚拟模型中选择；嵌套重定向在解析时展开。'
-            : '选项来自该渠道已配置的模型列表。同级负载请添加多行、不同渠道、相同优先级。'}
-        </p>
       </div>
 
       <div className={sideDrawerSwitchItemClassName()}>
