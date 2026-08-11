@@ -174,3 +174,12 @@ func TestRecordModelRedirectHopFailure_IgnoresNonPositiveChannel(t *testing.T) {
 	assert.False(t, IsModelRedirectHopDisabled(0, "x"))
 	assert.False(t, IsModelRedirectHopDisabled(-1, "x"))
 }
+
+func TestFilterRedirectCooldownDown_KeepsModelOnly(t *testing.T) {
+	cands := []RedirectCandidate{
+		{ChannelID: 0, Model: "gpt-5.6", Priority: 100},
+	}
+	out := FilterRedirectCooldownDown(cands, "auto")
+	require.Len(t, out, 1)
+	assert.Equal(t, "gpt-5.6", out[0].Model)
+}

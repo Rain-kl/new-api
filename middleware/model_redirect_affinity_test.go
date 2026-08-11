@@ -239,3 +239,54 @@ func TestTryModelRedirectSelection_AffinityPersistsOnSuccess(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, ch.Id, preferred)
 }
+
+func seedMappingRedirect(t *testing.T) {
+	t.Helper()
+	prevMem := common.MemoryCacheEnabled
+	// Use the in-memory channel cache: the DB selection path needs the model
+	// package's col-quoting vars (initCol), which the middleware test process
+	// does not initialize.
+	common.MemoryCacheEnabled = true
+	t.Cleanup(func() { common.MemoryCacheEnabled = prevMem })
+	require.NoError(t, model.DB.AutoMigrate(&model.Ability{}))
+	require.NoError(t, model.DB.Create(&model.Channel{
+		Id: 3, Type: 1, Key: "k3", Status: common.ChannelStatusEnabled, Name: "c3", Group: "default", Models: "gpt-5.6",
+	}).Error)
+	prio := int64(10)
+	require.NoError(t, model.DB.Create(&model.Ability{
+		Group: "default", Model: "gpt-5.6", ChannelId: 3, Enabled: true, Priority: &prio, Weight: 10,
+	}).Error)
+	redirect := &model.ModelRedirect{
+		Name:          "auto",
+		Groups:        "default",
+		Enabled:       true,
+		Mode:          model.ModelRedirectModeMapping,
+		MappingTarget: "gpt-5.6",
+	}
+	require.NoError(t, model.DB.Create(redirect).Error)
+	model.InitChannelCache()
+	require.NoError(t, model.LoadModelRedirectCache())
+}
+
+func TestTryModelRedirectSelection_MappingPicksChannel(t *testing.T) {
+	setupModelRedirectAffinityTest(t)
+	seedMappingRedirect(t)
+
+	c := newRedirectAffinityCtx("sess-map")
+	ch, selectGroup, attemptModel, handled, aborted := tryModelRedirectSelection(c, "auto", "default")
+	require.False(t, aborted)
+	require.True(t, handled)
+	require.NotNil(t, ch)
+	require.Equal(t, 3, ch.Id)
+	require.Equal(t, "default", selectGroup)
+	require.Equal(t, "gpt-5.6", attemptModel)
+
+	raw, ok := common.GetContextKey(c, constant.ContextKeyModelRedirectCandidates)
+	require.True(t, ok)
+	cands := raw.([]model.RedirectCandidate)
+	require.Len(t, cands, 1)
+	require.True(t, cands[0].IsModelOnly())
+	require.Equal(t, "gpt-5.6", cands[0].Model)
+
+	require.Equal(t, "default", common.GetContextKeyString(c, constant.ContextKeyModelRedirectGroup))
+}

@@ -158,6 +158,13 @@ func TestRedirectCandidate_IsNestedRedirect(t *testing.T) {
 	require.False(t, RedirectCandidate{ChannelID: 1, Model: "x"}.IsNestedRedirect())
 }
 
+func TestRedirectCandidate_IsModelOnly(t *testing.T) {
+	require.True(t, RedirectCandidate{ChannelID: 0, Model: "gpt-5.6"}.IsModelOnly())
+	require.False(t, RedirectCandidate{ChannelID: 0, Model: " "}.IsModelOnly())
+	require.False(t, RedirectCandidate{ChannelID: 1, Model: "gpt-5.6"}.IsModelOnly())
+	require.False(t, RedirectCandidate{ChannelID: constant.ModelRedirectSentinelChannelID, Model: "x"}.IsModelOnly())
+}
+
 func TestAttemptModel_Passthrough(t *testing.T) {
 	if got := AttemptModel("deepseek-flash", RedirectCandidate{Model: ""}); got != "deepseek-flash" {
 		t.Fatalf("passthrough: got %q", got)
@@ -289,6 +296,16 @@ func TestFilterRedirectCandidates_UsesClientModelForPassthrough(t *testing.T) {
 	if len(out) != 0 {
 		t.Fatalf("missing channel should be filtered, got %d", len(out))
 	}
+}
+
+func TestFilterRedirectCandidates_KeepsModelOnly(t *testing.T) {
+	cands := []RedirectCandidate{
+		{ChannelID: 0, Model: "gpt-5.6", Priority: 100},
+		{ChannelID: 999999, Model: "", Priority: 90}, // missing channel -> dropped
+	}
+	out := FilterRedirectCandidates(cands, "auto", "default", "/v1/chat/completions", nil)
+	require.Len(t, out, 1)
+	assert.Equal(t, "gpt-5.6", out[0].Model)
 }
 
 func TestDetectModelRedirectCycle(t *testing.T) {
@@ -525,4 +542,469 @@ func TestOrderRedirectCandidatesWithAffinity_ZeroPreferredMatchesLegacy(t *testi
 func TestOrderRedirectCandidatesWithAffinity_Empty(t *testing.T) {
 	require.Nil(t, OrderRedirectCandidatesWithAffinity(nil, 7))
 	require.Nil(t, OrderRedirectCandidatesWithAffinity([]RedirectCandidate{}, 7))
+}
+
+func TestBuildModelRedirectCacheMap_MappingEntry(t *testing.T) {
+	setupModelRedirectTestDB(t)
+	now := common.GetTimestamp()
+	require.NoError(t, DB.Create(&ModelRedirect{
+		Name: "auto", Groups: "default", Enabled: true,
+		Mode: ModelRedirectModeMapping, MappingTarget: "gpt-5.6",
+		CreatedAt: now, UpdatedAt: now,
+	}).Error)
+	require.NoError(t, DB.Create(&ModelRedirect{
+		Name: "ha", Groups: "default", Enabled: true,
+		CreatedAt: now, UpdatedAt: now,
+		Targets: []ModelRedirectTarget{
+			{ChannelId: 1, Model: "gpt-4o", Priority: 100, Enabled: true},
+		},
+	}).Error)
+	// Mapping entry with empty target must be skipped.
+	require.NoError(t, DB.Create(&ModelRedirect{
+		Name: "bad", Groups: "default", Enabled: true,
+		Mode: ModelRedirectModeMapping, MappingTarget: "",
+		CreatedAt: now, UpdatedAt: now,
+	}).Error)
+
+	m, err := buildModelRedirectCacheMap()
+	require.NoError(t, err)
+
+	auto := m["auto"]
+	require.NotNil(t, auto)
+	require.Equal(t, ModelRedirectModeMapping, auto.Mode)
+	require.Equal(t, "gpt-5.6", auto.MappingTarget)
+	require.Empty(t, auto.Targets)
+
+	ha := m["ha"]
+	require.NotNil(t, ha)
+	require.Equal(t, ModelRedirectModeRedirect, ha.Mode)
+	require.Len(t, ha.Targets, 1)
+
+	_, ok := m["bad"]
+	require.False(t, ok)
+}
+
+func TestResolveModelRedirect_MappingDirect(t *testing.T) {
+	modelRedirectCacheMu.Lock()
+	modelRedirectCache = map[string]*modelRedirectCacheEntry{
+		"auto": {
+			Mode:          ModelRedirectModeMapping,
+			MappingTarget: "gpt-5.6",
+			Groups:        map[string]struct{}{"default": {}},
+		},
+	}
+	modelRedirectLoaded = true
+	modelRedirectCacheMu.Unlock()
+	t.Cleanup(func() {
+		modelRedirectCacheMu.Lock()
+		modelRedirectCache = nil
+		modelRedirectLoaded = false
+		modelRedirectCacheMu.Unlock()
+	})
+
+	cands, ok := ResolveModelRedirect("auto", "default")
+	require.True(t, ok)
+	require.Len(t, cands, 1)
+	require.True(t, cands[0].IsModelOnly())
+	assert.Equal(t, "gpt-5.6", cands[0].Model)
+	assert.Equal(t, modelRedirectDefaultPrio, cands[0].Priority)
+}
+
+func TestResolveModelRedirect_MappingGroupGate(t *testing.T) {
+	modelRedirectCacheMu.Lock()
+	modelRedirectCache = map[string]*modelRedirectCacheEntry{
+		"auto": {
+			Mode:          ModelRedirectModeMapping,
+			MappingTarget: "gpt-5.6",
+			Groups:        map[string]struct{}{"vip": {}},
+		},
+	}
+	modelRedirectLoaded = true
+	modelRedirectCacheMu.Unlock()
+	t.Cleanup(func() {
+		modelRedirectCacheMu.Lock()
+		modelRedirectCache = nil
+		modelRedirectLoaded = false
+		modelRedirectCacheMu.Unlock()
+	})
+
+	if _, ok := ResolveModelRedirect("auto", "default"); ok {
+		t.Fatal("expected miss for wrong group")
+	}
+}
+
+func TestResolveModelRedirect_RedirectNestedMapping(t *testing.T) {
+	modelRedirectCacheMu.Lock()
+	modelRedirectCache = map[string]*modelRedirectCacheEntry{
+		"gpt": {
+			Mode:          ModelRedirectModeMapping,
+			MappingTarget: "gpt-5.6",
+			Groups:        map[string]struct{}{"default": {}},
+		},
+		"claude": {
+			Mode:          ModelRedirectModeMapping,
+			MappingTarget: "claude-5",
+			Groups:        map[string]struct{}{"default": {}},
+		},
+		"auto": {
+			Mode:   ModelRedirectModeRedirect,
+			Groups: map[string]struct{}{"default": {}},
+			Targets: []RedirectCandidate{
+				{ChannelID: constant.ModelRedirectSentinelChannelID, Model: "gpt", Priority: 100},
+				{ChannelID: constant.ModelRedirectSentinelChannelID, Model: "claude", Priority: 90},
+			},
+		},
+	}
+	modelRedirectLoaded = true
+	modelRedirectCacheMu.Unlock()
+	t.Cleanup(func() {
+		modelRedirectCacheMu.Lock()
+		modelRedirectCache = nil
+		modelRedirectLoaded = false
+		modelRedirectCacheMu.Unlock()
+	})
+
+	cands, ok := ResolveModelRedirect("auto", "default")
+	require.True(t, ok)
+	require.Len(t, cands, 2)
+	require.True(t, cands[0].IsModelOnly())
+	require.True(t, cands[1].IsModelOnly())
+	assert.Equal(t, "gpt-5.6", cands[0].Model)
+	assert.Equal(t, 100, cands[0].Priority, "nested mapping inherits the sentinel priority")
+	assert.Equal(t, "claude-5", cands[1].Model)
+	assert.Equal(t, 90, cands[1].Priority)
+}
+
+func TestResolveModelRedirect_MappingChain(t *testing.T) {
+	modelRedirectCacheMu.Lock()
+	modelRedirectCache = map[string]*modelRedirectCacheEntry{
+		"a": {
+			Mode:          ModelRedirectModeMapping,
+			MappingTarget: "b",
+			Groups:        map[string]struct{}{"default": {}},
+		},
+		"b": {
+			Mode:          ModelRedirectModeMapping,
+			MappingTarget: "gpt-5.6",
+			Groups:        map[string]struct{}{"default": {}},
+		},
+	}
+	modelRedirectLoaded = true
+	modelRedirectCacheMu.Unlock()
+	t.Cleanup(func() {
+		modelRedirectCacheMu.Lock()
+		modelRedirectCache = nil
+		modelRedirectLoaded = false
+		modelRedirectCacheMu.Unlock()
+	})
+
+	cands, ok := ResolveModelRedirect("a", "default")
+	require.True(t, ok)
+	require.Len(t, cands, 1)
+	require.True(t, cands[0].IsModelOnly())
+	assert.Equal(t, "gpt-5.6", cands[0].Model)
+}
+
+func TestResolveModelRedirect_MappingToRedirect(t *testing.T) {
+	modelRedirectCacheMu.Lock()
+	modelRedirectCache = map[string]*modelRedirectCacheEntry{
+		"gpt": {
+			Mode:          ModelRedirectModeMapping,
+			MappingTarget: "ha",
+			Groups:        map[string]struct{}{"default": {}},
+		},
+		"ha": {
+			Mode:   ModelRedirectModeRedirect,
+			Groups: map[string]struct{}{"default": {}},
+			Targets: []RedirectCandidate{
+				{ChannelID: 1, Model: "gpt-4o", Priority: 100},
+			},
+		},
+	}
+	modelRedirectLoaded = true
+	modelRedirectCacheMu.Unlock()
+	t.Cleanup(func() {
+		modelRedirectCacheMu.Lock()
+		modelRedirectCache = nil
+		modelRedirectLoaded = false
+		modelRedirectCacheMu.Unlock()
+	})
+
+	cands, ok := ResolveModelRedirect("gpt", "default")
+	require.True(t, ok)
+	require.Len(t, cands, 1)
+	require.False(t, cands[0].IsModelOnly())
+	assert.Equal(t, 1, cands[0].ChannelID)
+	assert.Equal(t, "gpt-4o", cands[0].Model)
+}
+
+func TestResolveModelRedirect_MappingCycleTerminates(t *testing.T) {
+	modelRedirectCacheMu.Lock()
+	modelRedirectCache = map[string]*modelRedirectCacheEntry{
+		"a": {
+			Mode:          ModelRedirectModeMapping,
+			MappingTarget: "b",
+			Groups:        map[string]struct{}{"default": {}},
+		},
+		"b": {
+			Mode:          ModelRedirectModeMapping,
+			MappingTarget: "a",
+			Groups:        map[string]struct{}{"default": {}},
+		},
+	}
+	modelRedirectLoaded = true
+	modelRedirectCacheMu.Unlock()
+	t.Cleanup(func() {
+		modelRedirectCacheMu.Lock()
+		modelRedirectCache = nil
+		modelRedirectLoaded = false
+		modelRedirectCacheMu.Unlock()
+	})
+
+	_, ok := ResolveModelRedirect("a", "default")
+	require.False(t, ok, "mapping cycle must terminate without candidates")
+}
+
+func TestValidateModelRedirectInput_Mapping(t *testing.T) {
+	setupModelRedirectTestDB(t)
+
+	// mapping mode requires a target
+	err := validateModelRedirectInput(&ModelRedirectInput{
+		Name: "auto", Groups: []string{"default"}, Mode: ModelRedirectModeMapping, MappingTarget: "",
+	}, true, "")
+	require.Error(t, err)
+
+	// valid mapping entry
+	err = validateModelRedirectInput(&ModelRedirectInput{
+		Name: "auto", Groups: []string{"default"}, Mode: ModelRedirectModeMapping, MappingTarget: "gpt-5.6",
+	}, true, "")
+	require.NoError(t, err)
+
+	// invalid mode
+	err = validateModelRedirectInput(&ModelRedirectInput{
+		Name: "auto", Groups: []string{"default"}, Mode: "bogus", MappingTarget: "gpt-5.6",
+	}, true, "")
+	require.Error(t, err)
+
+	// mapping target must not contain commas / control whitespace
+	err = validateModelRedirectInput(&ModelRedirectInput{
+		Name: "auto", Groups: []string{"default"}, Mode: ModelRedirectModeMapping, MappingTarget: "a,b",
+	}, true, "")
+	require.Error(t, err)
+
+	// redirect mode ignores mapping target and still requires targets
+	err = validateModelRedirectInput(&ModelRedirectInput{
+		Name: "auto", Groups: []string{"default"}, Mode: ModelRedirectModeRedirect, MappingTarget: "gpt-5.6",
+	}, true, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "target")
+}
+
+func TestValidateModelRedirectInput_MappingCycle(t *testing.T) {
+	setupModelRedirectTestDB(t)
+	now := common.GetTimestamp()
+	// Seed a -> b (mapping edge); saving b -> a must be a cycle.
+	require.NoError(t, DB.Create(&ModelRedirect{
+		Name: "a", Groups: "default", Enabled: true, Mode: ModelRedirectModeMapping,
+		MappingTarget: "b", CreatedAt: now, UpdatedAt: now,
+	}).Error)
+
+	err := validateModelRedirectInput(&ModelRedirectInput{
+		Name: "b", Groups: []string{"default"}, Mode: ModelRedirectModeMapping, MappingTarget: "a",
+	}, true, "")
+	require.Error(t, err)
+	assert.Contains(t, strings.ToLower(err.Error()), "cycle")
+
+	// self-reference is a cycle
+	err = validateModelRedirectInput(&ModelRedirectInput{
+		Name: "c", Groups: []string{"default"}, Mode: ModelRedirectModeMapping, MappingTarget: "c",
+	}, true, "")
+	require.Error(t, err)
+}
+
+func TestValidateModelRedirectInput_MappingTargetDisabled(t *testing.T) {
+	setupModelRedirectTestDB(t)
+	now := common.GetTimestamp()
+	ha := &ModelRedirect{
+		Name: "ha", Groups: "default", Enabled: true, Mode: ModelRedirectModeMapping,
+		MappingTarget: "gpt-5.6", CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, DB.Create(ha).Error)
+	// Enabled has gorm:"default:true", so Create omits a false zero value; set
+	// the disabled state explicitly so the disabled-target check is exercised.
+	require.NoError(t, DB.Model(&ModelRedirect{}).Where("id = ?", ha.Id).Update("enabled", false).Error)
+
+	err := validateModelRedirectInput(&ModelRedirectInput{
+		Name: "auto", Groups: []string{"default"}, Mode: ModelRedirectModeMapping, MappingTarget: "ha",
+	}, true, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "disabled")
+}
+
+func TestUpdateModelRedirect_PreservesInactiveConfig(t *testing.T) {
+	setupModelRedirectTestDB(t)
+	// High ids avoid collisions with channel rows other tests leave in the shared DB.
+	require.NoError(t, DB.Create(&Channel{Id: 9001, Name: "c1", Type: 1, Key: "k1", Models: "gpt-4o,claude"}).Error)
+	require.NoError(t, DB.Create(&Channel{Id: 9002, Name: "c2", Type: 1, Key: "k2", Models: "claude"}).Error)
+	t.Cleanup(func() {
+		_ = DB.Where("id IN ?", []int{9001, 9002}).Delete(&Channel{}).Error
+	})
+
+	created, err := CreateModelRedirect(&ModelRedirectInput{
+		Name: "auto", Groups: []string{"default"}, Mode: ModelRedirectModeRedirect,
+		Targets: []ModelRedirectTargetInput{
+			{ChannelId: 9001, Model: "gpt-4o", Priority: 100, Enabled: common.GetPointer(true)},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, ModelRedirectModeRedirect, created.Mode)
+	require.Len(t, created.Targets, 1)
+
+	// Switch to mapping mode: stored targets must survive.
+	updated, err := UpdateModelRedirect(created.Id, &ModelRedirectInput{
+		Name: "auto", Groups: []string{"default"}, Mode: ModelRedirectModeMapping, MappingTarget: "gpt-5.6",
+	})
+	require.NoError(t, err)
+	require.Equal(t, ModelRedirectModeMapping, updated.Mode)
+	require.Equal(t, "gpt-5.6", updated.MappingTarget)
+	require.Len(t, updated.Targets, 1, "redirect targets must survive a switch to mapping mode")
+
+	// Switch back to redirect: stored mapping target must survive, targets replaced.
+	updated2, err := UpdateModelRedirect(created.Id, &ModelRedirectInput{
+		Name: "auto", Groups: []string{"default"}, Mode: ModelRedirectModeRedirect,
+		Targets: []ModelRedirectTargetInput{
+			{ChannelId: 9002, Model: "claude", Priority: 80, Enabled: common.GetPointer(true)},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, ModelRedirectModeRedirect, updated2.Mode)
+	require.Equal(t, "gpt-5.6", updated2.MappingTarget, "mapping target must survive a switch back to redirect mode")
+	require.Len(t, updated2.Targets, 1)
+	assert.Equal(t, 9002, updated2.Targets[0].ChannelId)
+}
+
+func TestModelRedirectDisplaySourceModel_Mapping(t *testing.T) {
+	modelRedirectCacheMu.Lock()
+	modelRedirectCache = map[string]*modelRedirectCacheEntry{
+		"auto": {
+			Mode:          ModelRedirectModeMapping,
+			MappingTarget: "gpt-5.6",
+			Groups:        map[string]struct{}{"default": {}},
+		},
+	}
+	modelRedirectLoaded = true
+	modelRedirectCacheMu.Unlock()
+	t.Cleanup(func() {
+		modelRedirectCacheMu.Lock()
+		modelRedirectCache = nil
+		modelRedirectLoaded = false
+		modelRedirectCacheMu.Unlock()
+	})
+
+	assert.Equal(t, "gpt-5.6", ModelRedirectDisplaySourceModel("auto"))
+}
+
+func TestForEachEnabledModelRedirect_IncludesMapping(t *testing.T) {
+	modelRedirectCacheMu.Lock()
+	modelRedirectCache = map[string]*modelRedirectCacheEntry{
+		"auto": {
+			Mode:          ModelRedirectModeMapping,
+			MappingTarget: "gpt-5.6",
+			Groups:        map[string]struct{}{"default": {}},
+		},
+		"ha": {
+			Mode:   ModelRedirectModeRedirect,
+			Groups: map[string]struct{}{"default": {}},
+			Targets: []RedirectCandidate{
+				{ChannelID: 1, Model: "gpt-4o", Priority: 100},
+			},
+		},
+	}
+	modelRedirectLoaded = true
+	modelRedirectCacheMu.Unlock()
+	t.Cleanup(func() {
+		modelRedirectCacheMu.Lock()
+		modelRedirectCache = nil
+		modelRedirectLoaded = false
+		modelRedirectCacheMu.Unlock()
+	})
+
+	got := map[string]string{}
+	ForEachEnabledModelRedirect(func(name string, _ []string, displaySource string) {
+		got[name] = displaySource
+	})
+	assert.Equal(t, "gpt-5.6", got["auto"])
+	assert.Equal(t, "gpt-4o", got["ha"])
+}
+
+func TestRedirectSlotMapping(t *testing.T) {
+	cands := []RedirectCandidate{
+		{ChannelID: 1, Model: "a", Priority: 10},       // channel-bound: 1 slot
+		{ChannelID: 0, Model: "gpt-5.6", Priority: 5},  // model-only: 3 slots
+		{ChannelID: 0, Model: "claude-5", Priority: 4}, // model-only: 3 slots
+	}
+	// slot ranges: cand0 [0], cand1 [1,2,3], cand2 [4,5,6]
+	cases := []struct {
+		slot, candIdx, level int
+	}{
+		{0, 0, 0},
+		{1, 1, 0},
+		{2, 1, 1},
+		{3, 1, 2},
+		{4, 2, 0},
+		{5, 2, 1},
+		{6, 2, 2},
+	}
+	for _, tc := range cases {
+		idx, lvl, ok := redirectSlotMapping(cands, tc.slot, 3)
+		require.True(t, ok, "slot %d", tc.slot)
+		assert.Equal(t, tc.candIdx, idx, "slot %d", tc.slot)
+		assert.Equal(t, tc.level, lvl, "slot %d", tc.slot)
+	}
+	if _, _, ok := redirectSlotMapping(cands, 7, 3); ok {
+		t.Fatal("slot 7 must be out of range")
+	}
+	if _, _, ok := redirectSlotMapping(nil, 0, 3); ok {
+		t.Fatal("empty candidate list must be out of range")
+	}
+}
+
+func TestResolveRedirectSlot_ChannelBound(t *testing.T) {
+	setupModelRedirectTestDB(t)
+	require.NoError(t, DB.Create(&Channel{Id: 9007, Name: "c7", Type: 1, Key: "k7", Models: "gpt-4o"}).Error)
+	t.Cleanup(func() {
+		_ = DB.Where("id = ?", 9007).Delete(&Channel{}).Error
+	})
+	cands := []RedirectCandidate{
+		{ChannelID: 9007, Model: "gpt-4o", Priority: 10},
+	}
+	ch, model := ResolveRedirectSlot(cands, 0, "ha", "default", "/v1/chat/completions", 3)
+	require.NotNil(t, ch)
+	assert.Equal(t, 9007, ch.Id)
+	assert.Equal(t, "gpt-4o", model)
+
+	ch2, _ := ResolveRedirectSlot(cands, 1, "ha", "default", "/v1/chat/completions", 3)
+	require.Nil(t, ch2, "channel-bound candidate spans exactly one slot")
+}
+
+func TestResolveRedirectSlot_ModelOnlyProbe(t *testing.T) {
+	setupModelRedirectTestDB(t)
+	prevMem := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false // tests select channels via the DB (abilities) path
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = prevMem
+		_ = DB.Where("id = ?", 9003).Delete(&Channel{}).Error
+	})
+	require.NoError(t, DB.Create(&Channel{Id: 9003, Name: "c3", Type: 1, Key: "k3", Models: "gpt-5.6", Group: "default"}).Error)
+	prio := int64(10)
+	require.NoError(t, DB.Create(&Ability{Group: "default", Model: "gpt-5.6", ChannelId: 9003, Enabled: true, Priority: &prio, Weight: 10}).Error)
+
+	cands := []RedirectCandidate{
+		{ChannelID: 0, Model: "gpt-5.6", Priority: 5},
+	}
+	// slot 0 -> tier 0 selects the seeded channel
+	ch, model := ResolveRedirectSlot(cands, 0, "auto", "default", "/v1/chat/completions", 3)
+	require.NotNil(t, ch)
+	assert.Equal(t, 9003, ch.Id)
+	assert.Equal(t, "gpt-5.6", model)
 }

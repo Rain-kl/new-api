@@ -193,9 +193,17 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	relayInfo.LastError = nil
 
 	// Model redirect: allow up to len(candidates) attempts even when RetryTimes=0.
+	// Model-only candidates each get RetryTimes+1 channel-tier slots (the same
+	// budget a normal request for the mapped model would have).
 	maxRetry := common.RetryTimes
 	if cands, ok := getModelRedirectCandidates(c); ok && len(cands) > 0 {
-		if n := len(cands) - 1; n > maxRetry {
+		modelOnlyCount := 0
+		for _, cand := range cands {
+			if cand.IsModelOnly() {
+				modelOnlyCount++
+			}
+		}
+		if n := len(cands) - 1 + modelOnlyCount*common.RetryTimes; n > maxRetry {
 			maxRetry = n
 		}
 	}
@@ -348,9 +356,6 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	// Personal: walk model-redirect priority list on retries.
 	if cands, ok := getModelRedirectCandidates(c); ok {
 		idx := retryParam.GetRetry()
-		if idx >= len(cands) {
-			return nil, types.NewError(fmt.Errorf("model redirect candidates exhausted"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
-		}
 		// First attempt: distributor already set context; reuse unless ChannelMeta was set.
 		if info.ChannelMeta == nil && idx == 0 {
 			autoBan := c.GetBool("auto_ban")
@@ -365,16 +370,16 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 				AutoBan: &autoBanInt,
 			}, nil
 		}
-		cand := cands[idx]
-		channel, err := model.GetChannelForRedirect(cand.ChannelID)
-		if err != nil || channel == nil {
-			return nil, types.NewError(fmt.Errorf("model redirect channel #%d not found", cand.ChannelID), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
-		}
 		clientModel := common.GetContextKeyString(c, constant.ContextKeyModelRedirectClientModel)
 		if clientModel == "" {
 			clientModel = info.OriginModelName
 		}
-		attemptModel := model.AttemptModel(clientModel, cand)
+		group := common.GetContextKeyString(c, constant.ContextKeyModelRedirectGroup)
+		channel, attemptModel := model.ResolveRedirectSlot(
+			cands, idx, clientModel, group, c.Request.URL.Path, common.RetryTimes+1)
+		if channel == nil {
+			return nil, types.NewError(fmt.Errorf("model redirect candidates exhausted"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
 		if setupErr := middleware.SetupContextForSelectedChannel(c, channel, attemptModel); setupErr != nil {
 			return nil, setupErr
 		}

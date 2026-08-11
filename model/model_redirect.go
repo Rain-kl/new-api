@@ -14,14 +14,16 @@ import (
 // ModelRedirect is a virtual model name with an ordered channel+model fallback chain.
 // Personal feature — registered via RegisterMainDBModel (low-conflict migrate).
 type ModelRedirect struct {
-	Id        int                   `json:"id" gorm:"primaryKey;autoIncrement"`
-	Name      string                `json:"name" gorm:"size:128;uniqueIndex;not null"` // virtual model name
-	Groups    string                `json:"groups" gorm:"type:text"`                   // comma-separated
-	Enabled   bool                  `json:"enabled" gorm:"default:true"`
-	Remark    string                `json:"remark" gorm:"type:varchar(255);default:''"`
-	CreatedAt int64                 `json:"created_at" gorm:"bigint;default:0"`
-	UpdatedAt int64                 `json:"updated_at" gorm:"bigint;default:0"`
-	Targets   []ModelRedirectTarget `json:"targets,omitempty" gorm:"foreignKey:RedirectId;constraint:OnDelete:CASCADE"`
+	Id            int                   `json:"id" gorm:"primaryKey;autoIncrement"`
+	Name          string                `json:"name" gorm:"size:128;uniqueIndex;not null"` // virtual model name
+	Groups        string                `json:"groups" gorm:"type:text"`                   // comma-separated
+	Enabled       bool                  `json:"enabled" gorm:"default:true"`
+	Remark        string                `json:"remark" gorm:"type:varchar(255);default:''"`
+	Mode          string                `json:"mode" gorm:"size:16;default:redirect"`      // "redirect" | "mapping"
+	MappingTarget string                `json:"mapping_target" gorm:"size:128;default:''"` // mapping-mode target model name
+	CreatedAt     int64                 `json:"created_at" gorm:"bigint;default:0"`
+	UpdatedAt     int64                 `json:"updated_at" gorm:"bigint;default:0"`
+	Targets       []ModelRedirectTarget `json:"targets,omitempty" gorm:"foreignKey:RedirectId;constraint:OnDelete:CASCADE"`
 }
 
 // ModelRedirectTarget is one priority hop: channel + optional upstream model.
@@ -55,9 +57,17 @@ func (c RedirectCandidate) IsNestedRedirect() bool {
 	return c.ChannelID == constant.ModelRedirectSentinelChannelID
 }
 
+// IsModelOnly reports whether the hop carries only a model name and no concrete
+// channel (ChannelID == 0); the channel layer selects a channel at pick time.
+func (c RedirectCandidate) IsModelOnly() bool {
+	return c.ChannelID == 0 && strings.TrimSpace(c.Model) != ""
+}
+
 type modelRedirectCacheEntry struct {
-	Groups  map[string]struct{}
-	Targets []RedirectCandidate
+	Mode          string
+	MappingTarget string
+	Groups        map[string]struct{}
+	Targets       []RedirectCandidate
 }
 
 var (
@@ -81,6 +91,11 @@ const (
 	modelRedirectDefaultPrio           = 100
 	modelRedirectMaxExpandDepth        = 32
 	modelRedirectMaxExpandedCandidates = 128
+)
+
+const (
+	ModelRedirectModeRedirect = "redirect"
+	ModelRedirectModeMapping  = "mapping"
 )
 
 func InvalidateModelRedirectCache() {
@@ -117,9 +132,25 @@ func buildModelRedirectCacheMap() (map[string]*modelRedirectCacheEntry, error) {
 		if name == "" {
 			continue
 		}
+		groups := parseGroupSet(r.Groups)
+		if len(groups) == 0 {
+			continue
+		}
+		mode := strings.TrimSpace(r.Mode)
+		if mode == "" {
+			mode = ModelRedirectModeRedirect
+		}
 		entry := &modelRedirectCacheEntry{
-			Groups:  parseGroupSet(r.Groups),
-			Targets: make([]RedirectCandidate, 0, len(r.Targets)),
+			Mode:          mode,
+			MappingTarget: strings.TrimSpace(r.MappingTarget),
+			Groups:        groups,
+		}
+		if mode == ModelRedirectModeMapping {
+			if entry.MappingTarget == "" {
+				continue
+			}
+			next[name] = entry
+			continue
 		}
 		targets := append([]ModelRedirectTarget(nil), r.Targets...)
 		// Cache keeps higher priority first; same-priority order is rebalanced at resolve.
@@ -151,7 +182,7 @@ func buildModelRedirectCacheMap() (map[string]*modelRedirectCacheEntry, error) {
 				Weight:    t.Weight,
 			})
 		}
-		if len(entry.Targets) == 0 || len(entry.Groups) == 0 {
+		if len(entry.Targets) == 0 {
 			continue
 		}
 		next[name] = entry
@@ -215,11 +246,13 @@ func groupSetContains(set map[string]struct{}, group string) bool {
 	return ok
 }
 
-// expandModelRedirectTargets recursively expands nested virtual-model refs
-// (sentinel ChannelID) into a flat list of real-channel candidates.
-// Black-box order: full child chain before the parent's next target.
+// resolveModelRedirectEntry recursively resolves a virtual model into terminal
+// candidates (channel-bound or model-only). priorityOverride threads the priority
+// of the referencing redirect target through mapping chains (0 = none / top-level).
+// Terminates at a channel hop (redirect mode) or at a model-only candidate when
+// the mapping target is not itself a virtual model.
 // Caller must not hold modelRedirectCacheMu; this function takes RLock as needed.
-func expandModelRedirectTargets(name, usingGroup string, depth int, stack map[string]struct{}) []RedirectCandidate {
+func resolveModelRedirectEntry(name, usingGroup string, depth int, stack map[string]struct{}, priorityOverride int) []RedirectCandidate {
 	name = strings.TrimSpace(name)
 	usingGroup = strings.TrimSpace(usingGroup)
 	if name == "" || usingGroup == "" {
@@ -233,21 +266,46 @@ func expandModelRedirectTargets(name, usingGroup string, depth int, stack map[st
 		common.SysLog(fmt.Sprintf("model redirect expand cycle at %q", name))
 		return nil
 	}
-	// Caller holds no lock; take RLock for entry lookup only.
+
 	modelRedirectCacheMu.RLock()
 	entry := modelRedirectCache[name]
+	var found bool
+	var mode string
+	var mappingTarget string
 	var targets []RedirectCandidate
-	if entry != nil && groupSetContains(entry.Groups, usingGroup) && len(entry.Targets) > 0 {
+	if entry != nil && groupSetContains(entry.Groups, usingGroup) {
+		found = true
+		mode = entry.Mode
+		mappingTarget = strings.TrimSpace(entry.MappingTarget)
 		targets = make([]RedirectCandidate, len(entry.Targets))
 		copy(targets, entry.Targets)
 	}
 	modelRedirectCacheMu.RUnlock()
-	if len(targets) == 0 {
+	if !found {
 		return nil
 	}
 	stack[name] = struct{}{}
 	defer delete(stack, name)
 
+	if mode == ModelRedirectModeMapping {
+		if mappingTarget == "" {
+			return nil
+		}
+		// Re-check the target against the virtual list; keep resolving if it is one.
+		modelRedirectCacheMu.RLock()
+		_, isVirtual := modelRedirectCache[mappingTarget]
+		modelRedirectCacheMu.RUnlock()
+		if isVirtual {
+			return resolveModelRedirectEntry(mappingTarget, usingGroup, depth+1, stack, priorityOverride)
+		}
+		p := priorityOverride
+		if p <= 0 {
+			p = modelRedirectDefaultPrio
+		}
+		return []RedirectCandidate{{ChannelID: 0, Model: mappingTarget, Priority: p}}
+	}
+
+	// redirect mode (mode may be "" in entries built before the field existed)
 	out := make([]RedirectCandidate, 0, len(targets))
 	for _, t := range targets {
 		if t.IsNestedRedirect() {
@@ -255,7 +313,7 @@ func expandModelRedirectTargets(name, usingGroup string, depth int, stack map[st
 			if child == "" {
 				continue
 			}
-			nested := expandModelRedirectTargets(child, usingGroup, depth+1, stack)
+			nested := resolveModelRedirectEntry(child, usingGroup, depth+1, stack, t.Priority)
 			out = append(out, nested...)
 		} else if t.ChannelID > 0 {
 			cand := t
@@ -272,10 +330,11 @@ func expandModelRedirectTargets(name, usingGroup string, depth int, stack map[st
 	return out
 }
 
-// ResolveModelRedirect returns a defensive copy of real-channel candidates when
-// clientModel is a virtual model enabled for usingGroup. Nested sentinel targets
-// are expanded black-box (full child chain before parent next target).
-// ok=false means "not a redirect model" or expand yielded no usable real hops.
+// ResolveModelRedirect returns a defensive copy of terminal candidates when
+// clientModel is an enabled virtual model for usingGroup. Mapping entries
+// resolve through their target (recursively); redirect entries expand their
+// priority chain. ok=false means "not a redirect/mapping model" or resolution
+// yielded no usable hops.
 //
 // Order is priority DESC within each redirect's cache entry (stable). Call
 // OrderRedirectCandidates after filtering inaccessible channels so same-priority
@@ -283,22 +342,12 @@ func expandModelRedirectTargets(name, usingGroup string, depth int, stack map[st
 func ResolveModelRedirect(clientModel, usingGroup string) (cands []RedirectCandidate, ok bool) {
 	clientModel = strings.TrimSpace(clientModel)
 	usingGroup = strings.TrimSpace(usingGroup)
-	if clientModel == "" {
+	if clientModel == "" || usingGroup == "" {
 		return nil, false
 	}
 	ensureModelRedirectCache()
-	// Copy raw targets under RLock (may include sentinels).
-	modelRedirectCacheMu.RLock()
-	entry := modelRedirectCache[clientModel]
-	if entry == nil || len(entry.Targets) == 0 || !groupSetContains(entry.Groups, usingGroup) {
-		modelRedirectCacheMu.RUnlock()
-		return nil, false
-	}
-	// Release lock before expand (expand re-locks for children).
-	modelRedirectCacheMu.RUnlock()
-
 	stack := map[string]struct{}{}
-	out := expandModelRedirectTargets(clientModel, usingGroup, 0, stack)
+	out := resolveModelRedirectEntry(clientModel, usingGroup, 0, stack, 0)
 	if len(out) == 0 {
 		return nil, false
 	}
@@ -437,6 +486,12 @@ func FilterRedirectCandidates(
 	}
 	out := make([]RedirectCandidate, 0, len(cands))
 	for _, cand := range cands {
+		if cand.IsModelOnly() {
+			// No concrete channel yet; path/model availability is checked when the
+			// channel layer selects a channel for cand.Model at pick time.
+			out = append(out, cand)
+			continue
+		}
 		ch, err := CacheGetChannel(cand.ChannelID)
 		if err != nil || ch == nil {
 			ch, err = GetChannelById(cand.ChannelID, true)
@@ -465,14 +520,93 @@ func GetChannelForRedirect(channelID int) (*Channel, error) {
 	return GetChannelById(channelID, true)
 }
 
+// FirstUsableRedirectCandidate returns the first candidate that yields a usable
+// channel (accessible, not cooled) together with that channel and the attempt
+// model. Model-only candidates are resolved through the channel layer for their
+// model. Returns (nil, "", -1) when no candidate is usable.
+func FirstUsableRedirectCandidate(cands []RedirectCandidate, clientModel, group, requestPath string) (*Channel, string, int) {
+	for i, cand := range cands {
+		if cand.ChannelID > 0 {
+			ch, err := GetChannelForRedirect(cand.ChannelID)
+			if err != nil || ch == nil {
+				continue
+			}
+			if IsModelRedirectHopDisabled(cand.ChannelID, AttemptModel(clientModel, cand)) {
+				continue
+			}
+			return ch, AttemptModel(clientModel, cand), i
+		}
+		if cand.IsModelOnly() {
+			ch, _ := GetRandomSatisfiedChannel(group, cand.Model, 0, requestPath)
+			if ch == nil {
+				continue
+			}
+			if IsModelRedirectHopDisabled(ch.Id, cand.Model) {
+				continue
+			}
+			return ch, cand.Model, i
+		}
+	}
+	return nil, "", -1
+}
+
+// redirectSlotMapping maps a 0-based attempt slot to (candidate index, level).
+// Channel-bound candidates span 1 slot; model-only candidates span modelSlots
+// slots (one per channel-priority tier). Returns ok=false when slot is beyond
+// the candidate list.
+func redirectSlotMapping(cands []RedirectCandidate, slot, modelSlots int) (candIdx, level int, ok bool) {
+	if len(cands) == 0 || slot < 0 || modelSlots < 1 {
+		return 0, 0, false
+	}
+	rangeStart := 0
+	for i, cand := range cands {
+		span := 1
+		if cand.IsModelOnly() {
+			span = modelSlots
+		}
+		rangeEnd := rangeStart + span
+		if slot < rangeEnd {
+			return i, slot - rangeStart, true
+		}
+		rangeStart = rangeEnd
+	}
+	return 0, 0, false
+}
+
+// ResolveRedirectSlot resolves the slot-th attempt of an ordered candidate list
+// to a channel + attempt model. Channel-bound candidates occupy one slot each;
+// model-only candidates occupy modelSlots slots (one per channel-priority tier).
+// Returns (nil, "") when the slot is beyond the list or the hop cannot resolve.
+func ResolveRedirectSlot(cands []RedirectCandidate, slot int, clientModel, group, requestPath string, modelSlots int) (*Channel, string) {
+	candIdx, level, ok := redirectSlotMapping(cands, slot, modelSlots)
+	if !ok {
+		return nil, ""
+	}
+	cand := cands[candIdx]
+	if cand.ChannelID > 0 {
+		ch, err := GetChannelForRedirect(cand.ChannelID)
+		if err != nil || ch == nil {
+			return nil, ""
+		}
+		return ch, AttemptModel(clientModel, cand)
+	}
+	ch, _ := GetRandomSatisfiedChannel(group, cand.Model, level, requestPath)
+	if ch == nil {
+		return nil, ""
+	}
+	return ch, cand.Model
+}
+
 // ----- CRUD -----
 
 type ModelRedirectInput struct {
-	Name    string                     `json:"name"`
-	Groups  []string                   `json:"groups"`
-	Enabled *bool                      `json:"enabled"`
-	Remark  string                     `json:"remark"`
-	Targets []ModelRedirectTargetInput `json:"targets"`
+	Name          string                     `json:"name"`
+	Groups        []string                   `json:"groups"`
+	Enabled       *bool                      `json:"enabled"`
+	Remark        string                     `json:"remark"`
+	Mode          string                     `json:"mode"`
+	MappingTarget string                     `json:"mapping_target"`
+	Targets       []ModelRedirectTargetInput `json:"targets"`
 }
 
 type ModelRedirectTargetInput struct {
@@ -531,8 +665,9 @@ func detectModelRedirectCycle(start string, edges map[string][]string) bool {
 	return visit(start)
 }
 
-// buildModelRedirectNestedEdgeMap builds name -> nested child names from rows.
-// Only enabled targets with sentinel channel_id and non-empty model contribute edges.
+// buildModelRedirectNestedEdgeMap builds name -> child names from rows. Edges
+// come from redirect sentinel targets and from mapping-mode mapping targets.
+// Only enabled rows contribute edges.
 func buildModelRedirectNestedEdgeMap(rows []*ModelRedirect) map[string][]string {
 	edges := make(map[string][]string, len(rows))
 	for _, r := range rows {
@@ -544,6 +679,13 @@ func buildModelRedirectNestedEdgeMap(rows []*ModelRedirect) map[string][]string 
 			continue
 		}
 		var children []string
+		if strings.TrimSpace(r.Mode) == ModelRedirectModeMapping {
+			if t := strings.TrimSpace(r.MappingTarget); t != "" {
+				children = append(children, t)
+			}
+			edges[name] = children
+			continue
+		}
 		for _, t := range r.Targets {
 			if !t.Enabled {
 				continue
@@ -562,10 +704,18 @@ func buildModelRedirectNestedEdgeMap(rows []*ModelRedirect) map[string][]string 
 	return edges
 }
 
-// nestedEdgesFromInput returns enabled nested-ref child names from the save payload.
-func nestedEdgesFromInput(targets []ModelRedirectTargetInput) []string {
+// nestedEdgesFromInput returns the save-payload's edges for cycle detection:
+// the mapping target for mapping-mode input, or enabled nested-ref child names
+// for redirect-mode input.
+func nestedEdgesFromInput(in *ModelRedirectInput) []string {
+	if strings.TrimSpace(in.Mode) == ModelRedirectModeMapping {
+		if t := strings.TrimSpace(in.MappingTarget); t != "" {
+			return []string{t}
+		}
+		return nil
+	}
 	var children []string
-	for _, t := range targets {
+	for _, t := range in.Targets {
 		enabled := true
 		if t.Enabled != nil {
 			enabled = *t.Enabled
@@ -606,65 +756,101 @@ func validateModelRedirectInput(in *ModelRedirectInput, isCreate bool, selfName 
 	if len(in.Remark) > modelRedirectMaxRemarkLen {
 		return fmt.Errorf("remark too long (max %d)", modelRedirectMaxRemarkLen)
 	}
-	if len(in.Targets) == 0 {
-		return fmt.Errorf("at least one redirect target is required")
+	mode := strings.TrimSpace(in.Mode)
+	if mode == "" {
+		mode = ModelRedirectModeRedirect
 	}
-	if len(in.Targets) > modelRedirectMaxTargets {
-		return fmt.Errorf("too many targets (max %d)", modelRedirectMaxTargets)
+	if mode != ModelRedirectModeRedirect && mode != ModelRedirectModeMapping {
+		return fmt.Errorf("invalid mode %q", mode)
 	}
-
-	hasEnabled := false
-	// Same Priority is allowed (equal load balancing among that tier).
-	for i, t := range in.Targets {
-		modelName := strings.TrimSpace(t.Model)
-		switch {
-		case t.ChannelId == constant.ModelRedirectSentinelChannelID:
-			// Nested virtual-model ref: model required, no self-ref, child must be enabled redirect.
-			if modelName == "" {
-				return fmt.Errorf("target[%d]: nested model is required", i)
+	mappingTarget := strings.TrimSpace(in.MappingTarget)
+	if mode == ModelRedirectModeMapping {
+		if mappingTarget == "" {
+			return fmt.Errorf("mapping target is required in mapping mode")
+		}
+		if len(mappingTarget) > modelRedirectMaxModelLen {
+			return fmt.Errorf("mapping target too long")
+		}
+		if strings.ContainsAny(mappingTarget, ",\n\r\t") {
+			return fmt.Errorf("mapping target must not contain commas or whitespace control characters")
+		}
+		// A mapping target that names an existing virtual model must be enabled.
+		if DB != nil {
+			var exists int64
+			if err := DB.Model(&ModelRedirect{}).Where("name = ?", mappingTarget).Count(&exists).Error; err != nil {
+				return err
 			}
-			if len(modelName) > modelRedirectMaxModelLen {
-				return fmt.Errorf("target[%d]: model name too long", i)
-			}
-			if modelName == name {
-				return fmt.Errorf("target[%d]: nested model must not reference itself", i)
-			}
-			if DB != nil {
-				var n int64
-				err := DB.Model(&ModelRedirect{}).Where("name = ? AND enabled = ?", modelName, true).Count(&n).Error
-				if err != nil {
+			if exists > 0 {
+				var enabledCount int64
+				if err := DB.Model(&ModelRedirect{}).Where("name = ? AND enabled = ?", mappingTarget, true).Count(&enabledCount).Error; err != nil {
 					return err
 				}
-				if n == 0 {
-					return fmt.Errorf("target[%d]: nested model %q not found or not enabled", i, modelName)
+				if enabledCount == 0 {
+					return fmt.Errorf("mapping target %q is a virtual model but disabled", mappingTarget)
 				}
 			}
-		case t.ChannelId > 0:
-			if _, err := GetChannelById(t.ChannelId, false); err != nil {
-				return fmt.Errorf("target[%d]: channel %d not found", i, t.ChannelId)
+		}
+	} else {
+		if len(in.Targets) == 0 {
+			return fmt.Errorf("at least one redirect target is required")
+		}
+		if len(in.Targets) > modelRedirectMaxTargets {
+			return fmt.Errorf("too many targets (max %d)", modelRedirectMaxTargets)
+		}
+
+		hasEnabled := false
+		// Same Priority is allowed (equal load balancing among that tier).
+		for i, t := range in.Targets {
+			modelName := strings.TrimSpace(t.Model)
+			switch {
+			case t.ChannelId == constant.ModelRedirectSentinelChannelID:
+				// Nested virtual-model ref: model required, no self-ref, child must be enabled redirect.
+				if modelName == "" {
+					return fmt.Errorf("target[%d]: nested model is required", i)
+				}
+				if len(modelName) > modelRedirectMaxModelLen {
+					return fmt.Errorf("target[%d]: model name too long", i)
+				}
+				if modelName == name {
+					return fmt.Errorf("target[%d]: nested model must not reference itself", i)
+				}
+				if DB != nil {
+					var n int64
+					err := DB.Model(&ModelRedirect{}).Where("name = ? AND enabled = ?", modelName, true).Count(&n).Error
+					if err != nil {
+						return err
+					}
+					if n == 0 {
+						return fmt.Errorf("target[%d]: nested model %q not found or not enabled", i, modelName)
+					}
+				}
+			case t.ChannelId > 0:
+				if _, err := GetChannelById(t.ChannelId, false); err != nil {
+					return fmt.Errorf("target[%d]: channel %d not found", i, t.ChannelId)
+				}
+				if len(modelName) > modelRedirectMaxModelLen {
+					return fmt.Errorf("target[%d]: model name too long", i)
+				}
+			default:
+				return fmt.Errorf("target[%d]: invalid channel_id", i)
 			}
-			if len(modelName) > modelRedirectMaxModelLen {
-				return fmt.Errorf("target[%d]: model name too long", i)
+			if t.Priority > modelRedirectMaxPriority {
+				return fmt.Errorf("target[%d]: priority too large (max %d)", i, modelRedirectMaxPriority)
 			}
-		default:
-			return fmt.Errorf("target[%d]: invalid channel_id", i)
+			if t.Weight != nil && *t.Weight < 0 {
+				return fmt.Errorf("target[%d]: weight must be >= 0", i)
+			}
+			enabled := true
+			if t.Enabled != nil {
+				enabled = *t.Enabled
+			}
+			if enabled {
+				hasEnabled = true
+			}
 		}
-		if t.Priority > modelRedirectMaxPriority {
-			return fmt.Errorf("target[%d]: priority too large (max %d)", i, modelRedirectMaxPriority)
+		if !hasEnabled {
+			return fmt.Errorf("at least one enabled target is required")
 		}
-		if t.Weight != nil && *t.Weight < 0 {
-			return fmt.Errorf("target[%d]: weight must be >= 0", i)
-		}
-		enabled := true
-		if t.Enabled != nil {
-			enabled = *t.Enabled
-		}
-		if enabled {
-			hasEnabled = true
-		}
-	}
-	if !hasEnabled {
-		return fmt.Errorf("at least one enabled target is required")
 	}
 	if isCreate {
 		var count int64
@@ -688,7 +874,7 @@ func validateModelRedirectInput(in *ModelRedirectInput, isCreate bool, selfName 
 			// Rename: drop old name so it does not leave a phantom node in the graph.
 			delete(edges, selfName)
 		}
-		edges[name] = nestedEdgesFromInput(in.Targets)
+		edges[name] = nestedEdgesFromInput(in)
 		if detectModelRedirectCycle(name, edges) {
 			return fmt.Errorf("model redirect cycle detected")
 		}
@@ -788,18 +974,25 @@ func CreateModelRedirect(in *ModelRedirectInput) (*ModelRedirect, error) {
 	if in.Enabled != nil {
 		enabled = *in.Enabled
 	}
-	targets := buildTargetsFromInput(in.Targets, 0)
-	if len(targets) == 0 {
-		return nil, fmt.Errorf("at least one redirect target is required")
+	mode := strings.TrimSpace(in.Mode)
+	if mode == "" {
+		mode = ModelRedirectModeRedirect
 	}
 	row := &ModelRedirect{
-		Name:      strings.TrimSpace(in.Name),
-		Groups:    normalizeGroupList(in.Groups),
-		Enabled:   enabled,
-		Remark:    normalizeRemark(in.Remark),
-		CreatedAt: now,
-		UpdatedAt: now,
-		Targets:   targets,
+		Name:          strings.TrimSpace(in.Name),
+		Groups:        normalizeGroupList(in.Groups),
+		Enabled:       enabled,
+		Mode:          mode,
+		MappingTarget: strings.TrimSpace(in.MappingTarget),
+		Remark:        normalizeRemark(in.Remark),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if mode == ModelRedirectModeRedirect {
+		row.Targets = buildTargetsFromInput(in.Targets, 0)
+		if len(row.Targets) == 0 {
+			return nil, fmt.Errorf("at least one redirect target is required")
+		}
 	}
 	if err := DB.Create(row).Error; err != nil {
 		return nil, err
@@ -830,32 +1023,49 @@ func UpdateModelRedirect(id int, in *ModelRedirectInput) (*ModelRedirect, error)
 	if in.Enabled != nil {
 		enabled = *in.Enabled
 	}
-	targets := buildTargetsFromInput(in.Targets, id)
-	if len(targets) == 0 {
-		return nil, fmt.Errorf("at least one redirect target is required")
+	mode := strings.TrimSpace(in.Mode)
+	if mode == "" {
+		mode = ModelRedirectModeRedirect
 	}
+	updates := map[string]interface{}{
+		"name":       name,
+		"groups":     normalizeGroupList(in.Groups),
+		"enabled":    enabled,
+		"mode":       mode,
+		"remark":     normalizeRemark(in.Remark),
+		"updated_at": common.GetTimestamp(),
+	}
+	if mode == ModelRedirectModeMapping {
+		// Write the active mapping target; redirect targets stay untouched.
+		updates["mapping_target"] = strings.TrimSpace(in.MappingTarget)
+	} else {
+		// Redirect mode never touches the stored mapping target (non-destructive).
+		updates["mapping_target"] = existing.MappingTarget
+	}
+
 	tx := DB.Begin()
 	if tx.Error != nil {
 		return nil, tx.Error
 	}
-	if err := tx.Model(&ModelRedirect{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"name":       name,
-		"groups":     normalizeGroupList(in.Groups),
-		"enabled":    enabled,
-		"remark":     normalizeRemark(in.Remark),
-		"updated_at": common.GetTimestamp(),
-	}).Error; err != nil {
+	if err := tx.Model(&ModelRedirect{}).Where("id = ?", id).Updates(updates).Error; err != nil {
 		tx.Rollback()
 		return nil, err
 	}
-	if err := tx.Where("redirect_id = ?", id).Delete(&ModelRedirectTarget{}).Error; err != nil {
-		tx.Rollback()
-		return nil, err
-	}
-	for i := range targets {
-		if err := tx.Create(&targets[i]).Error; err != nil {
+	if mode == ModelRedirectModeRedirect {
+		targets := buildTargetsFromInput(in.Targets, id)
+		if len(targets) == 0 {
+			tx.Rollback()
+			return nil, fmt.Errorf("at least one redirect target is required")
+		}
+		if err := tx.Where("redirect_id = ?", id).Delete(&ModelRedirectTarget{}).Error; err != nil {
 			tx.Rollback()
 			return nil, err
+		}
+		for i := range targets {
+			if err := tx.Create(&targets[i]).Error; err != nil {
+				tx.Rollback()
+				return nil, err
+			}
 		}
 	}
 	if err := tx.Commit().Error; err != nil {
@@ -945,8 +1155,9 @@ func ModelRedirectEnableGroups(name string) []string {
 	return out
 }
 
-// ModelRedirectDisplaySourceModel returns the first (highest-priority) target model
-// or the virtual name for pricing/display when the virtual name itself has no ratio/price.
+// ModelRedirectDisplaySourceModel returns the model used for pricing/display when
+// the virtual name itself has no ratio/price: the mapping target for mapping
+// entries, or the first (highest-priority) target model for redirect entries.
 func ModelRedirectDisplaySourceModel(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -955,7 +1166,19 @@ func ModelRedirectDisplaySourceModel(name string) string {
 	ensureModelRedirectCache()
 	modelRedirectCacheMu.RLock()
 	entry := modelRedirectCache[name]
-	if entry == nil || len(entry.Targets) == 0 {
+	if entry == nil {
+		modelRedirectCacheMu.RUnlock()
+		return name
+	}
+	if entry.Mode == ModelRedirectModeMapping {
+		target := strings.TrimSpace(entry.MappingTarget)
+		modelRedirectCacheMu.RUnlock()
+		if target == "" {
+			return name
+		}
+		return target
+	}
+	if len(entry.Targets) == 0 {
 		modelRedirectCacheMu.RUnlock()
 		return name
 	}
@@ -964,8 +1187,9 @@ func ModelRedirectDisplaySourceModel(name string) string {
 	return AttemptModel(name, first)
 }
 
-// ForEachEnabledModelRedirect walks enabled virtual models (name + groups + first target).
-// Callback runs without holding the cache lock so callers may do heavier work safely.
+// ForEachEnabledModelRedirect walks enabled virtual models (name + groups +
+// display source). Callback runs without holding the cache lock so callers may
+// do heavier work safely.
 func ForEachEnabledModelRedirect(fn func(name string, groups []string, displaySource string)) {
 	if fn == nil {
 		return
@@ -979,17 +1203,25 @@ func ForEachEnabledModelRedirect(fn func(name string, groups []string, displaySo
 	}
 	items := make([]snap, 0, len(modelRedirectCache))
 	for name, entry := range modelRedirectCache {
-		if entry == nil || len(entry.Targets) == 0 {
+		if entry == nil {
 			continue
 		}
 		groups := make([]string, 0, len(entry.Groups))
 		for g := range entry.Groups {
 			groups = append(groups, g)
 		}
+		displaySource := name
+		if entry.Mode == ModelRedirectModeMapping {
+			if target := strings.TrimSpace(entry.MappingTarget); target != "" {
+				displaySource = target
+			}
+		} else if len(entry.Targets) > 0 {
+			displaySource = AttemptModel(name, entry.Targets[0])
+		}
 		items = append(items, snap{
 			name:          name,
 			groups:        groups,
-			displaySource: AttemptModel(name, entry.Targets[0]),
+			displaySource: displaySource,
 		})
 	}
 	modelRedirectCacheMu.RUnlock()

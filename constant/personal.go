@@ -17,6 +17,7 @@ const (
 	ContextKeyModelRedirectActive      ContextKey = "model_redirect_active"
 	ContextKeyModelRedirectClientModel ContextKey = "model_redirect_client_model"
 	ContextKeyModelRedirectCandidates  ContextKey = "model_redirect_candidates"
+	ContextKeyModelRedirectGroup       ContextKey = "model_redirect_group"
 
 	// ModelRedirectSentinelChannelID marks a model-redirect target as a nested
 	// virtual-model reference. Not a channels row; target.model holds the child name.

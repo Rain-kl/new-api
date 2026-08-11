@@ -81,7 +81,15 @@ func tryModelRedirectSelection(
 	// LB among reachable peers only (after path/channel/cooldown filter), with the
 	// bound channel promoted within its equal-priority run.
 	filtered = model.OrderRedirectCandidatesWithAffinity(filtered, preferredID)
-	if preferredID > 0 && len(filtered) > 0 && filtered[0].ChannelID == preferredID {
+	// Pick the first usable candidate. Model-only hops resolve a channel through
+	// the channel layer for the mapped model at pick time; channel-bound hops load
+	// the concrete channel. Earlier unusable hops are excluded from the retry list.
+	firstCh, firstModel, firstIdx := model.FirstUsableRedirectCandidate(filtered, clientModel, effectiveGroup, c.Request.URL.Path)
+	if firstCh == nil {
+		abortWithRelayMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": clientModel}), types.ErrorCodeModelNotFound)
+		return nil, "", "", true, true
+	}
+	if preferredID > 0 && filtered[firstIdx].ChannelID == preferredID {
 		service.MarkChannelAffinityUsed(c, effectiveGroup, preferredID)
 	}
 	// Redirect HA must never be suppressed by a rule's SkipRetryOnFailure: retries
@@ -90,13 +98,10 @@ func tryModelRedirectSelection(
 	service.ClearChannelAffinitySkipRetry(c)
 	common.SetContextKey(c, constant.ContextKeyModelRedirectActive, true)
 	common.SetContextKey(c, constant.ContextKeyModelRedirectClientModel, clientModel)
-	common.SetContextKey(c, constant.ContextKeyModelRedirectCandidates, filtered)
-	first := filtered[0]
-	ch, chErr := model.GetChannelForRedirect(first.ChannelID)
-	if chErr != nil || ch == nil {
-		abortWithRelayMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": clientModel}), types.ErrorCodeModelNotFound)
-		return nil, "", "", true, true
-	}
+	common.SetContextKey(c, constant.ContextKeyModelRedirectCandidates, filtered[firstIdx:])
+	// The resolved concrete group for auto-group requests; the retry slot walk
+	// needs it to select channels for model-only hops.
+	common.SetContextKey(c, constant.ContextKeyModelRedirectGroup, effectiveGroup)
 	// Billing/upstream identity for this hop is the attempt model.
-	return ch, effectiveGroup, model.AttemptModel(clientModel, first), true, false
+	return firstCh, effectiveGroup, firstModel, true, false
 }

@@ -126,6 +126,12 @@ func FilterRedirectCooldownDown(cands []RedirectCandidate, clientModel string) [
 	}
 	out := make([]RedirectCandidate, 0, len(cands))
 	for _, cand := range cands {
+		if cand.IsModelOnly() {
+			// Channel is chosen at pick time; cooldown is checked against the
+			// selected channel then.
+			out = append(out, cand)
+			continue
+		}
 		if cand.ChannelID <= 0 {
 			continue
 		}

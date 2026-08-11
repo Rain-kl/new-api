@@ -54,6 +54,10 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
+  RadioGroup,
+  RadioGroupItem,
+} from '@/components/ui/radio-group'
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -86,9 +90,12 @@ import {
   createModelRedirect,
   deleteModelRedirect,
   listModelRedirects,
+  MODEL_REDIRECT_MODE_MAPPING,
+  MODEL_REDIRECT_MODE_REDIRECT,
   MODEL_REDIRECT_SENTINEL_CHANNEL_ID,
   type ModelRedirect,
   type ModelRedirectInput,
+  type ModelRedirectMode,
   type ModelRedirectTarget,
   updateModelRedirect,
   updateModelRedirectStatus,
@@ -339,7 +346,7 @@ export function ModelRedirectSection() {
     const q = globalFilter.trim().toLowerCase()
     if (!q) return rows
     return rows.filter((row) => {
-      const hay = `${row.name} ${row.groups} ${row.remark}`.toLowerCase()
+      const hay = `${row.name} ${row.groups} ${row.remark} ${row.mode ?? ''} ${row.mapping_target ?? ''}`.toLowerCase()
       return hay.includes(q)
     })
   }, [rows, globalFilter])
@@ -380,8 +387,8 @@ export function ModelRedirectSection() {
       columns={columns}
       isLoading={isLoading}
       isFetching={isFetching}
-      emptyTitle='暂无模型重定向'
-      emptyDescription='创建虚拟模型，并配置渠道优先级目标（数值越大越优先，同级负载均衡），用于高可用降级。'
+      emptyTitle='暂无模型重定向/映射'
+      emptyDescription='创建虚拟模型：配置为模型映射（路由到目标模型名，由渠道层自动选渠道）或按优先级重定向到指定渠道。'
       emptyAction={
         <Button size='sm' onClick={openCreate}>
           <Plus className='h-4 w-4' />
@@ -424,6 +431,29 @@ function useModelRedirectColumns(opts: {
         ),
       },
       {
+        id: 'mode',
+        header: '模式',
+        size: 90,
+        cell: ({ row }) => {
+          const mode = row.original.mode || MODEL_REDIRECT_MODE_REDIRECT
+          return mode === MODEL_REDIRECT_MODE_MAPPING ? (
+            <StatusBadge
+              label='映射'
+              variant='info'
+              size='sm'
+              copyable={false}
+            />
+          ) : (
+            <StatusBadge
+              label='重定向'
+              variant='neutral'
+              size='sm'
+              copyable={false}
+            />
+          )
+        },
+      },
+      {
         accessorKey: 'groups',
         header: '分组',
         cell: ({ row }) => {
@@ -444,6 +474,23 @@ function useModelRedirectColumns(opts: {
         id: 'targets',
         header: '目标',
         cell: ({ row }) => {
+          const original = row.original
+          if (
+            (original.mode || MODEL_REDIRECT_MODE_REDIRECT) ===
+            MODEL_REDIRECT_MODE_MAPPING
+          ) {
+            if (!original.mapping_target) {
+              return <span className='text-muted-foreground text-sm'>-</span>
+            }
+            return (
+              <span className='text-muted-foreground truncate text-xs'>
+                <span className='font-mono'>→</span>{' '}
+                <span className='text-foreground/80 font-mono font-medium'>
+                  {original.mapping_target}
+                </span>
+              </span>
+            )
+          }
           const targets = [...(row.original.targets || [])].sort((a, b) => {
             if (b.priority !== a.priority) return b.priority - a.priority
             return a.channel_id - b.channel_id
@@ -655,6 +702,8 @@ function ModelRedirectDrawer(props: {
   const [groups, setGroups] = useState<string[]>([])
   const [remark, setRemark] = useState('')
   const [enabled, setEnabled] = useState(true)
+  const [mode, setMode] = useState<ModelRedirectMode>('redirect')
+  const [mappingTarget, setMappingTarget] = useState('')
   const [targets, setTargets] = useState<TargetDraft[]>([emptyTarget()])
 
   useEffect(() => {
@@ -664,12 +713,16 @@ function ModelRedirectDrawer(props: {
       setGroups(parseGroupsList(props.editing.groups))
       setRemark(props.editing.remark || '')
       setEnabled(props.editing.enabled)
+      setMode(props.editing.mode || MODEL_REDIRECT_MODE_REDIRECT)
+      setMappingTarget(props.editing.mapping_target || '')
       setTargets(targetsToDrafts(props.editing.targets || []))
     } else {
       setName('')
       setGroups([])
       setRemark('')
       setEnabled(true)
+      setMode(MODEL_REDIRECT_MODE_REDIRECT)
+      setMappingTarget('')
       setTargets([emptyTarget(100)])
     }
   }, [props.open, props.editing])
@@ -767,50 +820,57 @@ function ModelRedirectDrawer(props: {
       if (groups.length === 0) {
         throw new Error('请至少选择一个分组')
       }
-      if (targets.length > MAX_TARGETS) {
-        throw new Error(`目标数量过多（最多 ${MAX_TARGETS}）`)
+      const trimmedMappingTarget = mappingTarget.trim()
+      if (mode === MODEL_REDIRECT_MODE_MAPPING) {
+        if (!trimmedMappingTarget) {
+          throw new Error('请填写映射目标模型名')
+        }
+        if (/[,\n\r\t]/.test(trimmedMappingTarget)) {
+          throw new Error('映射目标不能包含逗号或空白控制字符')
+        }
+      } else {
+        if (targets.length > MAX_TARGETS) {
+          throw new Error(`目标数量过多（最多 ${MAX_TARGETS}）`)
+        }
+        if (
+          targets.some((target) => {
+            if (target.channel_id === MODEL_REDIRECT_SENTINEL_CHANNEL_ID) {
+              return !target.model.trim()
+            }
+            return !target.channel_id || target.channel_id <= 0
+          })
+        ) {
+          const missingNested = targets.some(
+            (target) =>
+              target.channel_id === MODEL_REDIRECT_SENTINEL_CHANNEL_ID &&
+              !target.model.trim()
+          )
+          throw new Error(
+            missingNested
+              ? t('Select a redirect model')
+              : '每个目标都必须选择渠道'
+          )
+        }
+        if (
+          targets.some((target) => clampPriority(target.priority) <= 0)
+        ) {
+          throw new Error('优先级必须为正整数（数值越大越优先）')
+        }
+        if (!targets.some((target) => target.enabled)) {
+          throw new Error('请至少启用一个目标')
+        }
       }
-      if (
-        targets.some((target) => {
-          if (target.channel_id === MODEL_REDIRECT_SENTINEL_CHANNEL_ID) {
-            return !target.model.trim()
-          }
-          return !target.channel_id || target.channel_id <= 0
-        })
-      ) {
-        const missingNested = targets.some(
-          (target) =>
-            target.channel_id === MODEL_REDIRECT_SENTINEL_CHANNEL_ID &&
-            !target.model.trim()
-        )
-        throw new Error(
-          missingNested
-            ? t('Select a redirect model')
-            : '每个目标都必须选择渠道'
-        )
-      }
-      if (
-        targets.some(
-          (target) => clampPriority(target.priority) <= 0
-        )
-      ) {
-        throw new Error('优先级必须为正整数（数值越大越优先）')
-      }
-      if (!targets.some((target) => target.enabled)) {
-        throw new Error('请至少启用一个目标')
-      }
-      const targetInputs = draftsToInputTargets(targets)
-      if (targetInputs.length === 0) {
-        throw new Error('请至少配置一个有效目标')
-      }
-      if (!targetInputs.some((t) => t.enabled !== false)) {
-        throw new Error('请至少启用一个目标')
-      }
+      const targetInputs =
+        mode === MODEL_REDIRECT_MODE_MAPPING
+          ? []
+          : draftsToInputTargets(targets)
       const input: ModelRedirectInput = {
         name: trimmedName,
         groups,
         enabled,
         remark: remark.slice(0, 255),
+        mode,
+        mapping_target: trimmedMappingTarget,
         targets: targetInputs,
       }
       if (isEdit && props.editing) {
@@ -834,12 +894,60 @@ function ModelRedirectDrawer(props: {
           </SheetTitle>
           <SheetDescription>
             {isEdit
-              ? '修改虚拟模型与多渠道优先级目标，完成后保存。'
-              : '创建虚拟模型并配置多渠道目标。数值越大越优先；相同优先级在不同渠道间负载均衡。计费以最终成功的那一档为准。'}
+              ? '修改虚拟模型配置（映射或优先级重定向），完成后保存。切换模式不会丢失另一模式的配置。'
+              : '创建虚拟模型：可配置为模型映射（路由到目标模型名）或优先级重定向（路由到指定渠道）。'}
           </SheetDescription>
         </SheetHeader>
 
         <div className={sideDrawerFormClassName()}>
+          <SideDrawerSection>
+            <div className='space-y-2'>
+              <Label>模式</Label>
+              <RadioGroup
+                value={mode}
+                onValueChange={(v) => setMode(v as ModelRedirectMode)}
+                className='grid grid-cols-2 gap-4'
+              >
+                <div className='flex items-center space-x-2'>
+                  <RadioGroupItem
+                    value={MODEL_REDIRECT_MODE_MAPPING}
+                    id='mode-mapping'
+                  />
+                  <Label htmlFor='mode-mapping'>模型映射</Label>
+                </div>
+                <div className='flex items-center space-x-2'>
+                  <RadioGroupItem
+                    value={MODEL_REDIRECT_MODE_REDIRECT}
+                    id='mode-redirect'
+                  />
+                  <Label htmlFor='mode-redirect'>模型重定向</Label>
+                </div>
+              </RadioGroup>
+              <p className='text-muted-foreground text-xs'>
+                {mode === MODEL_REDIRECT_MODE_MAPPING
+                  ? '将虚拟模型名映射为目标模型名，由渠道层自动路由；切换模式不会丢失另一模式的配置。'
+                  : '按优先级将虚拟模型分发到指定渠道；切换模式不会丢失另一模式的配置。'}
+              </p>
+            </div>
+          </SideDrawerSection>
+
+          {mode === MODEL_REDIRECT_MODE_MAPPING && (
+            <SideDrawerSection>
+              <div className='space-y-2'>
+                <Label>映射到（目标模型名）*</Label>
+                <Input
+                  value={mappingTarget}
+                  onChange={(e) => setMappingTarget(e.target.value)}
+                  placeholder='gpt-5.6'
+                  className='font-mono'
+                />
+                <p className='text-muted-foreground text-xs'>
+                  客户端请求此虚拟模型名时，流量按该目标模型名自动路由到提供此模型的渠道；也可填写另一个虚拟模型名以继续解析。
+                </p>
+              </div>
+            </SideDrawerSection>
+          )}
+
           <SideDrawerSection>
             <h3 className='text-sm font-semibold'>基本信息</h3>
 
@@ -886,14 +994,15 @@ function ModelRedirectDrawer(props: {
             </div>
           </SideDrawerSection>
 
-          <SideDrawerSection>
-            <div className='flex items-center justify-between gap-2'>
-              <div>
-                <h3 className='text-sm font-semibold'>优先级目标</h3>
-                <p className='text-muted-foreground text-xs'>
-                  每行 = 一个渠道上的一次尝试。优先级越大越优先；相同优先级在
-                  <span className='font-medium'>不同渠道</span>
-                  之间负载均衡。模型从该渠道已配置列表中单选，不选则透传虚拟名。
+          {mode === MODEL_REDIRECT_MODE_REDIRECT && (
+            <SideDrawerSection>
+              <div className='flex items-center justify-between gap-2'>
+                <div>
+                  <h3 className='text-sm font-semibold'>优先级目标</h3>
+                  <p className='text-muted-foreground text-xs'>
+                    每行 = 一个渠道上的一次尝试。优先级越大越优先；相同优先级在
+                    <span className='font-medium'>不同渠道</span>
+                    之间负载均衡。模型从该渠道已配置列表中单选，不选则透传虚拟名。
                 </p>
               </div>
               <Button
@@ -962,6 +1071,7 @@ function ModelRedirectDrawer(props: {
               ))}
             </div>
           </SideDrawerSection>
+          )}
         </div>
 
         <SheetFooter className={sideDrawerFooterClassName()}>

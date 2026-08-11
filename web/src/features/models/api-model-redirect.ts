@@ -21,6 +21,10 @@ import { api } from '@/lib/api'
 /** Sentinel channel_id for nested virtual-model redirect (not a real channel). */
 export const MODEL_REDIRECT_SENTINEL_CHANNEL_ID = -1
 
+export const MODEL_REDIRECT_MODE_REDIRECT = 'redirect'
+export const MODEL_REDIRECT_MODE_MAPPING = 'mapping'
+export type ModelRedirectMode = 'redirect' | 'mapping'
+
 export type ModelRedirectTarget = {
   id?: number
   redirect_id?: number
@@ -38,6 +42,8 @@ export type ModelRedirect = {
   groups: string
   enabled: boolean
   remark: string
+  mode: ModelRedirectMode
+  mapping_target: string
   created_at: number
   updated_at: number
   targets?: ModelRedirectTarget[]
@@ -48,6 +54,8 @@ export type ModelRedirectInput = {
   groups: string[]
   enabled?: boolean
   remark?: string
+  mode: ModelRedirectMode
+  mapping_target?: string
   targets: Array<{
     priority: number
     /** Reserved for future weighted LB. Omit or 0 = equal share. */
