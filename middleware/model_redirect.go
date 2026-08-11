@@ -26,6 +26,7 @@ func tryModelRedirectSelection(
 	c *gin.Context,
 	clientModel string,
 	usingGroup string,
+	requestPath string,
 ) (channel *model.Channel, selectGroup string, attemptModel string, handled bool, aborted bool) {
 	effectiveGroup := usingGroup
 	var cands []model.RedirectCandidate
@@ -51,7 +52,7 @@ func tryModelRedirectSelection(
 		cands,
 		clientModel,
 		effectiveGroup,
-		c.Request.URL.Path,
+		requestPath,
 		channelSupportsRequestPath,
 	)
 	// Skip hops temporarily disabled after recent failures (1m * fails, max 30m).
@@ -84,7 +85,7 @@ func tryModelRedirectSelection(
 	// Pick the first usable candidate. Model-only hops resolve a channel through
 	// the channel layer for the mapped model at pick time; channel-bound hops load
 	// the concrete channel. Earlier unusable hops are excluded from the retry list.
-	firstCh, firstModel, firstIdx := model.FirstUsableRedirectCandidate(filtered, clientModel, effectiveGroup, c.Request.URL.Path)
+	firstCh, firstModel, firstIdx := model.FirstUsableRedirectCandidate(filtered, clientModel, effectiveGroup, requestPath)
 	if firstCh == nil {
 		abortWithRelayMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": clientModel}), types.ErrorCodeModelNotFound)
 		return nil, "", "", true, true

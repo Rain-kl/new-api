@@ -103,7 +103,7 @@ func TestTryModelRedirectSelection_AffinityPromotesBoundChannel(t *testing.T) {
 
 	for i := 0; i < 20; i++ {
 		c := newRedirectAffinityCtx("sess-1")
-		ch, _, _, handled, aborted := tryModelRedirectSelection(c, "ha", "default")
+		ch, _, _, handled, aborted := tryModelRedirectSelection(c, "ha", "default", c.Request.URL.Path)
 		require.False(t, aborted)
 		require.True(t, handled)
 		require.NotNil(t, ch)
@@ -135,7 +135,7 @@ func TestTryModelRedirectSelection_AffinityClearsSkipRetry(t *testing.T) {
 	require.True(t, service.ShouldSkipRetryAfterChannelAffinityFailure(c),
 		"the affinity rule must establish SkipRetryOnFailure before redirect selection")
 
-	_, _, _, handled, aborted := tryModelRedirectSelection(c, "ha", "default")
+	_, _, _, handled, aborted := tryModelRedirectSelection(c, "ha", "default", c.Request.URL.Path)
 	require.False(t, aborted)
 	require.True(t, handled)
 	require.False(t, service.ShouldSkipRetryAfterChannelAffinityFailure(c),
@@ -156,7 +156,7 @@ func TestTryModelRedirectSelection_AffinityClearsDisabledBinding(t *testing.T) {
 	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", 2).Update("status", 2).Error)
 
 	c := newRedirectAffinityCtx("sess-3")
-	_, _, _, _, aborted := tryModelRedirectSelection(c, "ha", "default")
+	_, _, _, _, aborted := tryModelRedirectSelection(c, "ha", "default", c.Request.URL.Path)
 	require.False(t, aborted)
 
 	// Stale binding must be cleared: a fresh lookup reports not-found.
@@ -179,7 +179,7 @@ func TestTryModelRedirectSelection_AffinityClearsDisabledBindingWithNoCandidates
 	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id IN ?", []int{1, 2}).Update("status", 2).Error)
 
 	c := newRedirectAffinityCtx("sess-6")
-	_, _, _, handled, aborted := tryModelRedirectSelection(c, "ha", "default")
+	_, _, _, handled, aborted := tryModelRedirectSelection(c, "ha", "default", c.Request.URL.Path)
 	require.True(t, handled)
 	require.True(t, aborted)
 
@@ -203,7 +203,7 @@ func TestTryModelRedirectSelection_AffinityKeepsBindingOnCooldown(t *testing.T) 
 	t.Cleanup(func() { model.ClearModelRedirectHopCooldown(2, "ha") })
 
 	c := newRedirectAffinityCtx("sess-4")
-	ch, _, _, handled, aborted := tryModelRedirectSelection(c, "ha", "default")
+	ch, _, _, handled, aborted := tryModelRedirectSelection(c, "ha", "default", c.Request.URL.Path)
 	require.False(t, aborted)
 	require.True(t, handled)
 	require.NotNil(t, ch)
@@ -225,7 +225,7 @@ func TestTryModelRedirectSelection_AffinityPersistsOnSuccess(t *testing.T) {
 	require.False(t, found)
 
 	c := newRedirectAffinityCtx("sess-5")
-	ch, _, _, handled, aborted := tryModelRedirectSelection(c, "ha", "default")
+	ch, _, _, handled, aborted := tryModelRedirectSelection(c, "ha", "default", c.Request.URL.Path)
 	require.False(t, aborted)
 	require.True(t, handled)
 	require.NotNil(t, ch)
@@ -273,7 +273,7 @@ func TestTryModelRedirectSelection_MappingPicksChannel(t *testing.T) {
 	seedMappingRedirect(t)
 
 	c := newRedirectAffinityCtx("sess-map")
-	ch, selectGroup, attemptModel, handled, aborted := tryModelRedirectSelection(c, "auto", "default")
+	ch, selectGroup, attemptModel, handled, aborted := tryModelRedirectSelection(c, "auto", "default", c.Request.URL.Path)
 	require.False(t, aborted)
 	require.True(t, handled)
 	require.NotNil(t, ch)

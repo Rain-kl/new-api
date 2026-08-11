@@ -349,3 +349,15 @@ func BuildURL(base string, endpoint string) string {
 	}
 	return u.ResolveReference(ref).String()
 }
+
+// NormalizeRelaySelectionPath maps a playground path to its /v1 equivalent
+// (/pg/chat/completions -> /v1/chat/completions) so path-aware channel selection
+// (Advanced Custom route matching) treats the playground as the OpenAI chat API,
+// matching GenRelayInfo's upstream-path normalization. Non-playground paths are
+// returned unchanged.
+func NormalizeRelaySelectionPath(path string) string {
+	if strings.HasPrefix(path, "/pg") {
+		return "/v1" + strings.TrimPrefix(path, "/pg")
+	}
+	return path
+}

@@ -106,10 +106,16 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 
+				// Channel-selection path: the playground (/pg/...) is the same OpenAI
+				// chat API as /v1/..., so normalize it for path-aware channel selection
+				// (Advanced Custom route matching). Mirrors GenRelayInfo's upstream-path
+				// normalization; c.Request.URL.Path itself is left untouched.
+				selectionPath := common.NormalizeRelaySelectionPath(c.Request.URL.Path)
+
 				// Personal: model redirect (logic in model_redirect.go — keep call site thin).
 				// Precedence over affinity. specific_channel_id already skipped this branch.
 				if channel == nil {
-					ch, sg, attemptModel, handled, aborted := tryModelRedirectSelection(c, modelRequest.Model, usingGroup)
+					ch, sg, attemptModel, handled, aborted := tryModelRedirectSelection(c, modelRequest.Model, usingGroup, selectionPath)
 					if aborted {
 						return
 					}
@@ -125,7 +131,7 @@ func Distribute() func(c *gin.Context) {
 						affinityUsable := false
 						preferred, err := model.CacheGetChannel(preferredChannelID)
 						if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
-							channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) {
+							channelSupportsRequestPath(preferred, selectionPath, modelRequest.Model) {
 							if usingGroup == "auto" {
 								userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 								autoGroups := service.GetRequestAutoGroups(c, userGroup)
@@ -156,7 +162,7 @@ func Distribute() func(c *gin.Context) {
 							Ctx:         c,
 							ModelName:   modelRequest.Model,
 							TokenGroup:  usingGroup,
-							RequestPath: c.Request.URL.Path,
+							RequestPath: selectionPath,
 							Retry:       common.GetPointer(0),
 						})
 						if err != nil {

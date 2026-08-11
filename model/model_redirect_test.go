@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -628,6 +629,52 @@ func TestModelRedirectTarget_EnabledRoundTrip(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, cands, 1)
 	assert.Equal(t, 90, cands[0].Priority)
+}
+
+func TestGetRandomSatisfiedChannel_PlaygroundPathNeedsNormalization(t *testing.T) {
+	setupModelRedirectTestDB(t)
+	prevMem := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = prevMem
+		_ = DB.Where("id = ?", 9201).Delete(&Channel{}).Error
+	})
+
+	// Advanced Custom (type 58) channel serving deepseek-flash with a
+	// /v1/chat/completions route — the standard route config.
+	ch := &Channel{
+		Id: 9201, Type: constant.ChannelTypeAdvancedCustom, Key: "k",
+		Status: common.ChannelStatusEnabled, Name: "ac", Group: "default", Models: "deepseek-flash",
+	}
+	ch.SetOtherSettings(dto.ChannelOtherSettings{
+		AdvancedCustom: &dto.AdvancedCustomConfig{
+			Routes: []dto.AdvancedCustomRoute{
+				{IncomingPath: "/v1/chat/completions", UpstreamPath: "/v1/chat/completions", Models: []string{"deepseek-flash"}},
+			},
+		},
+	})
+	require.NoError(t, DB.Create(ch).Error)
+	// InitChannelCache derives group keys from the abilities table; seed one so
+	// the (default, deepseek-flash) bucket exists.
+	prio := int64(10)
+	require.NoError(t, DB.Create(&Ability{
+		Group: "default", Model: "deepseek-flash", ChannelId: 9201, Enabled: true, Priority: &prio, Weight: 10,
+	}).Error)
+	t.Cleanup(func() { _ = DB.Where("channel_id = ?", 9201).Delete(&Ability{}).Error })
+	InitChannelCache()
+
+	// The distributor normalizes the playground path to /v1/... before selection,
+	// so the Advanced Custom route matches and the channel is selected.
+	got, err := GetRandomSatisfiedChannel("default", "deepseek-flash", 0, "/v1/chat/completions")
+	require.NoError(t, err)
+	require.NotNil(t, got, "normalized /v1 path must match the Advanced Custom route")
+	require.Equal(t, 9201, got.Id)
+
+	// The raw playground path does NOT match the exact route — this is exactly why
+	// Distribute normalizes the selection path.
+	raw, err := GetRandomSatisfiedChannel("default", "deepseek-flash", 0, "/pg/chat/completions")
+	require.NoError(t, err)
+	require.Nil(t, raw, "raw /pg path must not match; the distributor normalizes before selection")
 }
 
 func TestCreateModelRedirect_DisabledEntryStaysDisabled(t *testing.T) {

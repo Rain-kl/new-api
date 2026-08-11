@@ -186,7 +186,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		Ctx:         c,
 		TokenGroup:  relayInfo.TokenGroup,
 		ModelName:   relayInfo.OriginModelName,
-		RequestPath: c.Request.URL.Path,
+		RequestPath: common.NormalizeRelaySelectionPath(c.Request.URL.Path),
 		Retry:       common.GetPointer(0),
 	}
 	relayInfo.RetryIndex = 0
@@ -376,7 +376,7 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		}
 		group := common.GetContextKeyString(c, constant.ContextKeyModelRedirectGroup)
 		channel, attemptModel := model.ResolveRedirectSlot(
-			cands, idx, clientModel, group, c.Request.URL.Path, common.RetryTimes+1)
+			cands, idx, clientModel, group, common.NormalizeRelaySelectionPath(c.Request.URL.Path), common.RetryTimes+1)
 		if channel == nil {
 			return nil, types.NewError(fmt.Errorf("model redirect candidates exhausted"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 		}
@@ -670,7 +670,7 @@ func RelayTask(c *gin.Context) {
 		Ctx:         c,
 		TokenGroup:  relayInfo.TokenGroup,
 		ModelName:   relayInfo.OriginModelName,
-		RequestPath: c.Request.URL.Path,
+		RequestPath: common.NormalizeRelaySelectionPath(c.Request.URL.Path),
 		Retry:       common.GetPointer(0),
 	}
 
