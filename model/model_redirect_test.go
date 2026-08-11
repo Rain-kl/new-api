@@ -584,6 +584,52 @@ func TestBuildModelRedirectCacheMap_MappingEntry(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestModelRedirectTarget_EnabledRoundTrip(t *testing.T) {
+	setupModelRedirectTestDB(t)
+	// High ids avoid collisions with channel rows other tests leave in the shared DB.
+	require.NoError(t, DB.Create(&Channel{Id: 9101, Name: "c1", Type: 1, Key: "k1", Models: "gpt-4o"}).Error)
+	t.Cleanup(func() {
+		_ = DB.Where("id = ?", 9101).Delete(&Channel{}).Error
+	})
+
+	// Create with one disabled target.
+	created, err := CreateModelRedirect(&ModelRedirectInput{
+		Name: "auto", Groups: []string{"default"}, Mode: ModelRedirectModeRedirect,
+		Targets: []ModelRedirectTargetInput{
+			{ChannelId: 9101, Model: "gpt-4o", Priority: 100, Enabled: common.GetPointer(true)},
+			{ChannelId: 9101, Model: "gpt-4o", Priority: 90, Enabled: common.GetPointer(false)},
+		},
+	})
+	require.NoError(t, err)
+	var t90 ModelRedirectTarget
+	require.NoError(t, DB.Where("redirect_id = ? AND priority = ?", created.Id, 90).First(&t90).Error)
+	require.False(t, t90.Enabled, "disabled target must be stored disabled on create")
+
+	// Update: flip the flags (100 disabled, 90 enabled).
+	updated, err := UpdateModelRedirect(created.Id, &ModelRedirectInput{
+		Name: "auto", Groups: []string{"default"}, Mode: ModelRedirectModeRedirect,
+		Targets: []ModelRedirectTargetInput{
+			{ChannelId: 9101, Model: "gpt-4o", Priority: 100, Enabled: common.GetPointer(false)},
+			{ChannelId: 9101, Model: "gpt-4o", Priority: 90, Enabled: common.GetPointer(true)},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, updated.Targets, 2)
+	var t100 ModelRedirectTarget
+	require.NoError(t, DB.Where("redirect_id = ? AND priority = ?", created.Id, 100).First(&t100).Error)
+	require.False(t, t100.Enabled, "disabled target must be stored disabled on update")
+	var t90b ModelRedirectTarget
+	require.NoError(t, DB.Where("redirect_id = ? AND priority = ?", created.Id, 90).First(&t90b).Error)
+	require.True(t, t90b.Enabled)
+
+	// Cache only routes enabled targets.
+	require.NoError(t, LoadModelRedirectCache())
+	cands, ok := ResolveModelRedirect("auto", "default")
+	require.True(t, ok)
+	require.Len(t, cands, 1)
+	assert.Equal(t, 90, cands[0].Priority)
+}
+
 func TestResolveModelRedirect_MappingDirect(t *testing.T) {
 	modelRedirectCacheMu.Lock()
 	modelRedirectCache = map[string]*modelRedirectCacheEntry{

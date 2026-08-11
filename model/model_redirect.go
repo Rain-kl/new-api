@@ -42,7 +42,10 @@ type ModelRedirectTarget struct {
 	Weight    int    `json:"weight" gorm:"not null;default:0"`
 	ChannelId int    `json:"channel_id" gorm:"not null;index"`
 	Model     string `json:"model" gorm:"size:128;default:''"` // empty = passthrough
-	Enabled   bool   `json:"enabled" gorm:"default:true"`
+	// No gorm default tag on Enabled: the `default:true` tag makes GORM omit the
+	// false zero value on Create (stored as enabled). The true default is enforced
+	// in buildTargetsFromInput, so the tag is both unnecessary and harmful.
+	Enabled bool `json:"enabled"`
 }
 
 // RedirectCandidate is a runtime pick for one attempt.
