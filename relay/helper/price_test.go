@@ -8,9 +8,12 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -271,4 +274,151 @@ func TestModelPriceHelperRequestBillingRatiosOnlyApplyToFixedPrice(t *testing.T)
 	require.Equal(t, "QuotaFromFloat", clamp.Op)
 	require.Equal(t, common.QuotaClampOverflow, clamp.Kind)
 	require.Nil(t, info.Billing)
+}
+
+// TestModelPriceHelperMappedTargetBillingFallback covers the channel model-mapping
+// billing fallback: when the requested model has no fee configured, billing uses
+// the selected channel's model_mapping target fee instead of erroring with
+// "price not configured".
+func TestModelPriceHelperMappedTargetBillingFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	savedRatios := ratio_setting.ModelRatio2JSONString()
+	savedPrices := ratio_setting.ModelPrice2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedRatios))
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedPrices))
+		operation_setting.SelfUseModeEnabled = false
+	})
+	ratios, err := common.Marshal(map[string]float64{
+		"mapped-model": 10,
+		"own-fee-model": 5,
+	})
+	require.NoError(t, err)
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(ratios)))
+	// Self-use mode must be off so unset models are a real error, not a 37.5 default.
+	operation_setting.SelfUseModeEnabled = false
+
+	newCtx := func(mapping string) *gin.Context {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Set("group", "default")
+		if mapping != "" {
+			ctx.Set("model_mapping", mapping)
+		}
+		return ctx
+	}
+	newInfo := func(model string) *relaycommon.RelayInfo {
+		return &relaycommon.RelayInfo{
+			OriginModelName: model,
+			UserGroup:       "default",
+			UsingGroup:      "default",
+		}
+	}
+
+	t.Run("no fee for origin bills by mapped target", func(t *testing.T) {
+		ctx := newCtx(`{"client-model":"mapped-model"}`)
+		info := newInfo("client-model")
+		priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+		require.NoError(t, err)
+		require.False(t, priceData.UsePrice)
+		require.Equal(t, 10.0, priceData.ModelRatio) // mapped-model ratio
+		require.Equal(t, 10000, priceData.QuotaToPreConsume)
+		require.Equal(t, "client-model", info.OriginModelName) // client model untouched
+	})
+
+	t.Run("no mapping still errors", func(t *testing.T) {
+		ctx := newCtx("")
+		_, err := ModelPriceHelper(ctx, newInfo("client-model"), 1000, &types.TokenCountMeta{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "client-model")
+	})
+
+	t.Run("mapping target without fee still errors", func(t *testing.T) {
+		ctx := newCtx(`{"client-model":"unpriced-model"}`)
+		_, err := ModelPriceHelper(ctx, newInfo("client-model"), 1000, &types.TokenCountMeta{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "client-model")
+	})
+
+	t.Run("mapping cycle does not fall back", func(t *testing.T) {
+		ctx := newCtx(`{"client-model":"model-b","model-b":"client-model"}`)
+		_, err := ModelPriceHelper(ctx, newInfo("client-model"), 1000, &types.TokenCountMeta{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "client-model")
+	})
+
+	t.Run("configured origin keeps its own fee", func(t *testing.T) {
+		ctx := newCtx(`{"own-fee-model":"mapped-model"}`)
+		priceData, err := ModelPriceHelper(ctx, newInfo("own-fee-model"), 1000, &types.TokenCountMeta{})
+		require.NoError(t, err)
+		require.Equal(t, 5.0, priceData.ModelRatio)
+		require.Equal(t, 5000, priceData.QuotaToPreConsume)
+	})
+
+	t.Run("accept-unset-ratio user keeps 37.5 default", func(t *testing.T) {
+		ctx := newCtx(`{"client-model":"mapped-model"}`)
+		info := newInfo("client-model")
+		info.UserSetting = dto.UserSetting{AcceptUnsetRatioModel: true}
+		priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+		require.NoError(t, err)
+		require.Equal(t, 37.5, priceData.ModelRatio)
+		require.Equal(t, 37500, priceData.QuotaToPreConsume)
+	})
+
+	t.Run("compact model maps through its base name", func(t *testing.T) {
+		ctx := newCtx(`{"base-model":"mapped-model"}`)
+		info := newInfo("base-model" + ratio_setting.CompactModelSuffix)
+		info.RelayMode = relayconstant.RelayModeResponsesCompact
+		priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+		require.NoError(t, err)
+		require.Equal(t, 10.0, priceData.ModelRatio)
+		require.Equal(t, 10000, priceData.QuotaToPreConsume)
+	})
+}
+
+func TestModelPriceHelperPerCallMappedTargetBillingFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	savedRatios := ratio_setting.ModelRatio2JSONString()
+	savedPrices := ratio_setting.ModelPrice2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedRatios))
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedPrices))
+		operation_setting.SelfUseModeEnabled = false
+	})
+	ratios, err := common.Marshal(map[string]float64{"mapped-model": 10})
+	require.NoError(t, err)
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(ratios)))
+	operation_setting.SelfUseModeEnabled = false
+
+	newCtx := func(mapping string) *gin.Context {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Set("group", "default")
+		if mapping != "" {
+			ctx.Set("model_mapping", mapping)
+		}
+		return ctx
+	}
+	newInfo := func(model string) *relaycommon.RelayInfo {
+		return &relaycommon.RelayInfo{
+			OriginModelName: model,
+			UserGroup:       "default",
+			UsingGroup:      "default",
+		}
+	}
+
+	t.Run("no fee for origin bills by mapped target", func(t *testing.T) {
+		ctx := newCtx(`{"task-model":"mapped-model"}`)
+		priceData, err := ModelPriceHelperPerCall(ctx, newInfo("task-model"))
+		require.NoError(t, err)
+		require.False(t, priceData.UsePrice)
+		require.Equal(t, 10.0, priceData.ModelRatio)
+		// ratio/2 * quota-per-unit: 10/2 * 500000 = 2500000
+		require.Equal(t, 2500000, priceData.Quota)
+	})
+
+	t.Run("no mapping still errors", func(t *testing.T) {
+		ctx := newCtx("")
+		_, err := ModelPriceHelperPerCall(ctx, newInfo("task-model"))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "task-model")
+	})
 }

@@ -572,6 +572,41 @@ Auth 仍为 `Authorization: Bearer <channel.key>`；路径仍以 `/v1/responses`
 
 ---
 
+## 十四、渠道模型映射：未定价模型按映射目标计费（2026-08-11）
+
+### 需求背景
+
+渠道配置了 `model_mapping`（如 `"gpt-3.5" → "gpt-3.5-turbo"`）时，预扣费计费此前只按**客户端请求模型**（`OriginModelName`）查费用。若该模型未配置任何费用（无价格、无倍率、无 tiered 表达式）且自用模式关闭、用户未开启「接受未定价模型」，请求直接报「模型 X 的价格未配置」——即使映射目标模型已配置费用。现改为**按映射目标的费用计费**，映射渠道不再需要给每个客户端模型单独定价。
+
+### 行为
+
+| 场景 | 计费基准 |
+|------|----------|
+| 请求模型已配置费用（价格 / 倍率 / tiered_expr） | 请求模型（不变） |
+| 用户开启「接受未定价模型」 | 请求模型，按 37.5 默认倍率（不变） |
+| 请求模型未配置费用 + 渠道 `model_mapping` 链尾目标已配置费用 | **映射目标模型**（本次新增） |
+| 无映射 / 映射目标也未定价 / 映射链成环 | 仍报「价格未配置」（不变） |
+
+- 映射链解析带**循环检测**（`a→b→a` 不成环时正常返回链尾；成环不回退）；自映射视为未映射。
+- 应用于 token 计费 `ModelPriceHelper` 与按次计费 `ModelPriceHelperPerCall`（MJ / Task）。
+- 映射目标为 tiered_expr 时按目标表达式计费（`modelPriceHelperTiered` 增加 `billingModel` 参数）。
+- Responses Compact 模型先剥 `-openai-compact` 后缀再走映射链，与 `ModelMappedHelper` 的上游模型推导一致。
+- 客户端模型 `OriginModelName` **不变**（消费日志仍记录请求模型）；`PriceData` 写入映射目标的费用，预扣费与结算口径一致。
+
+### 实现
+
+- 数据来源：`Distribute()` 中间件经 `SetupContextForSelectedChannel` 写入 gin context 的 `model_mapping`（计费执行时渠道已选定）。
+- `relay/helper/price.go` 新增 `resolveBillingModel` / `channelMappedModel`；`ModelPriceHelper` / `ModelPriceHelperPerCall` 所有费用查询改用解析出的计费模型。
+
+### 关键文件
+
+| 文件 | 说明 |
+|------|------|
+| `relay/helper/price.go` | `resolveBillingModel` / `channelMappedModel` + 两处 PriceHelper 改用计费模型 |
+| `relay/helper/price_test.go` | 映射回退 / 无映射报错 / 成环不回退 / 已定价不受影响 / 接受未定价保持 37.5 / compact 用例 |
+
+---
+
 ## 近期增量索引（2026-08-03 ~ 2026-08-11）
 
 | 日期 | 主题 | 章节 |
@@ -586,5 +621,6 @@ Auth 仍为 `Authorization: Bearer <channel.key>`；路径仍以 `/v1/responses`
 | 08-11 | 模型重定向：模型映射模式 + 同日修复 | §十一 |
 | 08-11 | Playground 路径归一化（高级自定义选渠道） | §十二 |
 | 08-11 | 渠道名称列上游 favicon | §十三 |
+| 08-11 | 渠道模型映射：未定价模型按映射目标计费 | §十四 |
 
 > 更细的 Codex 设计/任务拆分以 `docs/superpowers/` 下 2026-08-05 / 2026-08-06 文档为准；本文只记落地行为与文件面。
