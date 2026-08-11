@@ -25,6 +25,7 @@ import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
+import { useDebounce } from '@/hooks/use-debounce'
 import { cn } from '@/lib/utils'
 
 import type { UpstreamChannel } from '../types'
@@ -82,6 +83,7 @@ export function ChannelSelectorDialog({
 }: ChannelSelectorDialogProps) {
   const { t } = useTranslation()
   const [search, setSearch] = useState('')
+  const debouncedSearch = useDebounce(search, 200)
   const [pageIndex, setPageIndex] = useState(0)
   const pageSize = 20
   // Parent only mounts this dialog while open, so initial state is enough —
@@ -96,7 +98,7 @@ export function ChannelSelectorDialog({
   )
 
   const sortedChannels = useMemo(() => {
-    const searchLower = search.trim().toLowerCase()
+    const searchLower = debouncedSearch.trim().toLowerCase()
     const filtered = searchLower
       ? channels.filter(
           (ch) =>
@@ -112,7 +114,7 @@ export function ChannelSelectorDialog({
       if (!aIsOfficial && bIsOfficial) return 1
       return a.name.localeCompare(b.name)
     })
-  }, [channels, search])
+  }, [channels, debouncedSearch])
 
   const pageCount = Math.max(1, Math.ceil(sortedChannels.length / pageSize))
   const safePageIndex = Math.min(pageIndex, pageCount - 1)

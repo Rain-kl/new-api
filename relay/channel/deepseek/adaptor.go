@@ -154,7 +154,10 @@ func applyDeepSeekV4OpenAIThinkingSuffix(info *relaycommon.RelayInfo, request *d
 	request.THINKING = thinking
 	request.ReasoningEffort = effort
 	if info != nil {
-		info.ReasoningEffort = effort
+		if info.ChannelMeta != nil {
+			info.UpstreamModelName = baseModel
+		}
+		info.SetReasoningEffort(effort)
 	}
 	return nil
 }
@@ -189,7 +192,10 @@ func applyDeepSeekV4ClaudeThinkingSuffix(info *relaycommon.RelayInfo, request *d
 		request.OutputConfig = outputConfig
 	}
 	if info != nil {
-		info.ReasoningEffort = effort
+		if info.ChannelMeta != nil {
+			info.UpstreamModelName = baseModel
+		}
+		info.SetReasoningEffort(effort)
 	}
 	return nil
 }
@@ -231,7 +237,7 @@ func applyDeepSeekV4ResponsesThinkingSuffix(info *relaycommon.RelayInfo, request
 		}
 	}
 	if info != nil && request.Reasoning != nil && !info.ReasoningEffortFromChannel {
-		info.ReasoningEffort = request.Reasoning.Effort
+		info.SetReasoningEffort(request.Reasoning.Effort)
 	}
 }
 

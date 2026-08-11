@@ -354,7 +354,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			request.Model = originModel
 		}
 		if !info.ReasoningEffortFromChannel {
-			info.ReasoningEffort = request.ReasoningEffort
+			info.SetReasoningEffort(request.ReasoningEffort)
 		}
 
 		// o系列模型developer适配（o1-mini除外）
@@ -621,7 +621,7 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	}
 	if info != nil && request.Reasoning != nil && request.Reasoning.Effort != "" {
 		if !info.ReasoningEffortFromChannel {
-			info.ReasoningEffort = request.Reasoning.Effort
+			info.SetReasoningEffort(request.Reasoning.Effort)
 		}
 	}
 	return request, nil

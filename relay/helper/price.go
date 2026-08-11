@@ -9,7 +9,6 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -286,13 +285,7 @@ func resolveBillingModel(c *gin.Context, info *relaycommon.RelayInfo) string {
 	if HasModelBillingConfig(originModel) || info.UserSetting.AcceptUnsetRatioModel {
 		return originModel
 	}
-	// Mirror ModelMappedHelper's chain start: compact models map through their
-	// base name so the same mapping yields the same upstream target.
-	mappingStart := originModel
-	if info.RelayMode == relayconstant.RelayModeResponsesCompact && strings.HasSuffix(mappingStart, ratio_setting.CompactModelSuffix) {
-		mappingStart = strings.TrimSuffix(mappingStart, ratio_setting.CompactModelSuffix)
-	}
-	mapped, ok := channelMappedModel(c, mappingStart)
+	mapped, ok := channelMappedModel(c, originModel)
 	if !ok || !HasModelBillingConfig(mapped) {
 		return originModel
 	}

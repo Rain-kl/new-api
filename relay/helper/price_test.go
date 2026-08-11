@@ -8,7 +8,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
@@ -362,16 +361,6 @@ func TestModelPriceHelperMappedTargetBillingFallback(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 37.5, priceData.ModelRatio)
 		require.Equal(t, 37500, priceData.QuotaToPreConsume)
-	})
-
-	t.Run("compact model maps through its base name", func(t *testing.T) {
-		ctx := newCtx(`{"base-model":"mapped-model"}`)
-		info := newInfo("base-model" + ratio_setting.CompactModelSuffix)
-		info.RelayMode = relayconstant.RelayModeResponsesCompact
-		priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
-		require.NoError(t, err)
-		require.Equal(t, 10.0, priceData.ModelRatio)
-		require.Equal(t, 10000, priceData.QuotaToPreConsume)
 	})
 }
 

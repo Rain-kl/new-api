@@ -92,7 +92,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		}
 		if info != nil {
 			if !info.ReasoningEffortFromChannel {
-				info.ReasoningEffort = request.ReasoningEffort
+				info.SetReasoningEffort(request.ReasoningEffort)
 			}
 			info.UpstreamModelName = request.Model
 		}

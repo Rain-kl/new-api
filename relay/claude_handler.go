@@ -96,6 +96,13 @@ func prepareClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *
 		info.UpstreamModelName = request.Model
 	}
 
+	// Record the effective reasoning effort for usage logs (upstream #6641).
+	if !model_setting.GetGlobalSettings().PassThroughRequestEnabled && !info.ChannelSetting.PassThroughBodyEnabled {
+		if effort := request.GetEfforts(); effort != "" {
+			info.SetReasoningEffort(effort)
+		}
+	}
+
 	if info.ChannelSetting.SystemPrompt == "" {
 		return
 	}

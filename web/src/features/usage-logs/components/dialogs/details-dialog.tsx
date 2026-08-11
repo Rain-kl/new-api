@@ -76,6 +76,7 @@ import {
   isViolationFeeLog,
   getFirstResponseTimeColor,
   getResponseTimeColor,
+  getReasoningEffortVariant,
   renderAuditContent,
 } from '../../lib/format'
 import { ConversationDialog } from './conversation-dialog'
@@ -610,12 +611,9 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const useChannel = other?.admin_info?.use_channel
   const channelChain =
     useChannel && useChannel.length > 0 ? useChannel.join(' → ') : undefined
-  let reasoningEffortVariant: StatusBadgeProps['variant'] = 'green'
-  if (other?.reasoning_effort === 'high') {
-    reasoningEffortVariant = 'orange'
-  } else if (other?.reasoning_effort === 'medium') {
-    reasoningEffortVariant = 'yellow'
-  }
+  const reasoningEffortVariant = getReasoningEffortVariant(
+    other?.reasoning_effort
+  )
 
   return (
     <>
@@ -1106,6 +1104,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
               compact
               billingExpr={decodeBillingExprB64(other.expr_b64)}
               matchedTierLabel={other.matched_tier}
+              requestRules={other.request_rules}
               hideCacheColumns={!hasAnyCacheTokens(other)}
             />
           </DetailSection>
