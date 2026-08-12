@@ -1062,3 +1062,51 @@ func BenchmarkExprRunCached(b *testing.B) {
 		billingexpr.RunExpr(benchComplexExpr, params)
 	}
 }
+
+func TestComputeTieredQuotaAppliesChannelRatio(t *testing.T) {
+	exprStr := `tier("base", p * 2)`
+	cr := 0.5
+	snap := &billingexpr.BillingSnapshot{
+		ExprString:   exprStr,
+		ExprHash:     billingexpr.ExprHashString(exprStr),
+		GroupRatio:   2.0,
+		ChannelRatio: &cr,
+		QuotaPerUnit: 500_000,
+	}
+	res, err := billingexpr.ComputeTieredQuota(snap, billingexpr.TokenParams{P: 1000})
+	require.NoError(t, err)
+	// cost = 2000 -> before group = 2000/1e6 * 500000 = 1000
+	// after group = round(1000 * 2 * 0.5) = 1000
+	require.Equal(t, 1000, res.ActualQuotaAfterGroup)
+}
+
+func TestComputeTieredQuotaZeroChannelRatioIsFree(t *testing.T) {
+	exprStr := `tier("base", p * 2)`
+	cr := 0.0
+	snap := &billingexpr.BillingSnapshot{
+		ExprString:   exprStr,
+		ExprHash:     billingexpr.ExprHashString(exprStr),
+		GroupRatio:   2.0,
+		ChannelRatio: &cr,
+		QuotaPerUnit: 500_000,
+	}
+	res, err := billingexpr.ComputeTieredQuota(snap, billingexpr.TokenParams{P: 1000})
+	require.NoError(t, err)
+	// a free channel (channel ratio 0) must settle to 0, never to the
+	// group-ratio-scaled price.
+	require.Equal(t, 0, res.ActualQuotaAfterGroup)
+}
+
+func TestComputeTieredQuotaLegacySnapshotWithoutChannelRatioDefaultsToOne(t *testing.T) {
+	exprStr := `tier("base", p * 2)`
+	snap := &billingexpr.BillingSnapshot{
+		ExprString:   exprStr,
+		ExprHash:     billingexpr.ExprHashString(exprStr),
+		GroupRatio:   2.0,
+		QuotaPerUnit: 500_000,
+	}
+	res, err := billingexpr.ComputeTieredQuota(snap, billingexpr.TokenParams{P: 1000})
+	require.NoError(t, err)
+	// nil ChannelRatio (legacy snapshot) behaves as 1.0 -> 1000 * 2 = 2000
+	require.Equal(t, 2000, res.ActualQuotaAfterGroup)
+}

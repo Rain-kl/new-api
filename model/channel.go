@@ -28,7 +28,8 @@ type Channel struct {
 	TestModel          *string `json:"test_model"`
 	Status             int     `json:"status" gorm:"default:1"`
 	Name               string  `json:"name" gorm:"index"`
-	Weight             *uint   `json:"weight" gorm:"default:0"`
+	Weight             *uint    `json:"weight" gorm:"default:0"`
+	Ratio              *float64 `json:"ratio" gorm:"column:ratio;default:1"`
 	CreatedTime        int64   `json:"created_time" gorm:"bigint"`
 	TestTime           int64   `json:"test_time" gorm:"bigint"`
 	ResponseTime       int     `json:"response_time"` // in milliseconds
@@ -492,6 +493,15 @@ func (channel *Channel) GetWeight() int {
 		return 0
 	}
 	return int(*channel.Weight)
+}
+
+// GetRatio returns the channel billing multiplier (渠道倍率).
+// nil means 1 (no adjustment); 0 means the channel is free.
+func (channel *Channel) GetRatio() float64 {
+	if channel.Ratio == nil {
+		return 1
+	}
+	return *channel.Ratio
 }
 
 func (channel *Channel) GetBaseURL() string {

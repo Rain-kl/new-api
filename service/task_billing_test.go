@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/glebarez/sqlite"
 	"github.com/shopspring/decimal"
@@ -851,4 +852,41 @@ func TestSettle_NonPerCallBilling_AppliesAdaptorAdjustment(t *testing.T) {
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeRefund, log.Type)
+}
+
+func TestRecalculateTaskQuotaByTokensAppliesChannelRatio(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	// model ratio + group ratio are re-derived from settings at settle time
+	savedModelRatios := ratio_setting.ModelRatio2JSONString()
+	savedGroupRatios := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedModelRatios))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(savedGroupRatios))
+	})
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"test-model": 1}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default": 2}`))
+
+	const userID, tokenID, channelID = 20, 20, 20
+	const initQuota, preConsumed = 10000, 200
+
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-recalc-ratio", 5000)
+	seedChannel(t, channelID)
+
+	cr := 0.5
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext.ChannelRatio = &cr
+
+	// 100 tokens * modelRatio 1 * groupRatio 2 * channelRatio 0.5 = 100
+	RecalculateTaskQuotaByTokens(ctx, task, 100)
+
+	require.Equal(t, 100, task.Quota)
+	// pre-consumed 200, actual 100 -> refund 100 to the user wallet
+	require.Equal(t, initQuota+100, getUserQuota(t, userID))
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	require.Equal(t, model.LogTypeRefund, log.Type)
+	require.Equal(t, 100, log.Quota)
 }

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -410,4 +411,76 @@ func TestModelPriceHelperPerCallMappedTargetBillingFallback(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "task-model")
 	})
+}
+
+func TestHandleGroupRatioReadsChannelRatioFromContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+
+	info := &relaycommon.RelayInfo{UserGroup: "default", UsingGroup: "default"}
+
+	// No channel ratio in context -> default 1.
+	gi := HandleGroupRatio(ctx, info)
+	require.Equal(t, 1.0, gi.ChannelRatio)
+
+	common.SetContextKey(ctx, constant.ContextKeyChannelRatio, 0.5)
+	gi = HandleGroupRatio(ctx, info)
+	require.Equal(t, 0.5, gi.ChannelRatio)
+}
+
+func TestModelPriceHelperAppliesChannelRatio(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	savedModelRatios := ratio_setting.ModelRatio2JSONString()
+	savedGroupRatios := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedModelRatios))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(savedGroupRatios))
+	})
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-4o": 1}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default": 2}`))
+
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+	common.SetContextKey(ctx, constant.ContextKeyChannelRatio, 0.5)
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-4o",
+		UserGroup:       "default",
+		UsingGroup:      "default",
+	}
+
+	priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+	require.NoError(t, err)
+	// 1000 tokens * modelRatio 1 * groupRatio 2 * channelRatio 0.5 = 1000 quota
+	require.Equal(t, 1000, priceData.QuotaToPreConsume)
+	require.Equal(t, 0.5, priceData.GroupRatioInfo.ChannelRatio)
+}
+
+func TestModelPriceHelperChannelRatioZeroIsFree(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	savedModelRatios := ratio_setting.ModelRatio2JSONString()
+	savedGroupRatios := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedModelRatios))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(savedGroupRatios))
+	})
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-4o": 1}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default": 2}`))
+
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+	common.SetContextKey(ctx, constant.ContextKeyChannelRatio, 0.0)
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-4o",
+		UserGroup:       "default",
+		UsingGroup:      "default",
+	}
+
+	priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+	require.NoError(t, err)
+	require.Equal(t, 0, priceData.QuotaToPreConsume)
 }

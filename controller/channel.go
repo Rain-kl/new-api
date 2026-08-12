@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -539,6 +540,14 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 			if v, ok := keyMap["account_id"]; !ok || v == nil || strings.TrimSpace(fmt.Sprintf("%v", v)) == "" {
 				return fmt.Errorf("Codex key JSON must include account_id")
 			}
+		}
+	}
+
+	// 渠道倍率校验：0 <= ratio <= 100，拒绝 NaN / ±Inf
+	if channel.Ratio != nil {
+		ratio := *channel.Ratio
+		if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 || ratio > 100 {
+			return fmt.Errorf("渠道倍率必须在 0 到 100 之间；channel ratio must be between 0 and 100")
 		}
 	}
 

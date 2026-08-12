@@ -47,6 +47,7 @@ func TestCalculateTextQuotaSummaryUnifiedForClaudeSemantic(t *testing.T) {
 		CacheCreation1hRatio: 2,
 		GroupRatioInfo: hosttypes.GroupRatioInfo{
 			GroupRatio: 1,
+			ChannelRatio: 1,
 		},
 	}
 
@@ -93,6 +94,7 @@ func TestCalculateTextQuotaSummaryUsesSplitClaudeCacheCreationRatios(t *testing.
 			CacheCreation1hRatio: 3,
 			GroupRatioInfo: hosttypes.GroupRatioInfo{
 				GroupRatio: 1,
+				ChannelRatio: 1,
 			},
 		},
 		StartTime: time.Now(),
@@ -131,6 +133,7 @@ func TestCalculateTextQuotaSummaryUsesAnthropicUsageSemanticFromUpstreamUsage(t 
 			CacheCreation1hRatio: 2,
 			GroupRatioInfo: hosttypes.GroupRatioInfo{
 				GroupRatio: 1,
+				ChannelRatio: 1,
 			},
 		},
 		StartTime: time.Now(),
@@ -170,7 +173,7 @@ func TestCalculateTextQuotaSummaryUsesClaudeBillingUsageBeforeTopLevelUsage(t *t
 			CacheCreationRatio:   1.25,
 			CacheCreation5mRatio: 1.25,
 			CacheCreation1hRatio: 2,
-			GroupRatioInfo:       hosttypes.GroupRatioInfo{GroupRatio: 1},
+			GroupRatioInfo:       hosttypes.GroupRatioInfo{GroupRatio: 1, ChannelRatio: 1},
 		},
 		StartTime: time.Now(),
 	}
@@ -216,7 +219,7 @@ func TestCalculateTextQuotaSummaryUsesGeminiBillingUsageBeforeTopLevelUsage(t *t
 			ModelRatio:      1,
 			CompletionRatio: 2,
 			CacheRatio:      0.1,
-			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1},
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1, ChannelRatio: 1},
 		},
 		StartTime: time.Now(),
 	}
@@ -257,7 +260,7 @@ func TestCalculateTextQuotaSummaryUsesOpenAIBillingUsageBeforeTopLevelUsage(t *t
 		PriceData: hosttypes.PriceData{
 			ModelRatio:      1,
 			CompletionRatio: 2,
-			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1},
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1, ChannelRatio: 1},
 		},
 		StartTime: time.Now(),
 	}
@@ -369,7 +372,7 @@ func TestCalculateTextQuotaSummaryHandlesLegacyClaudeDerivedOpenAIUsage(t *testi
 			CacheCreationRatio:   1.25,
 			CacheCreation5mRatio: 1.25,
 			CacheCreation1hRatio: 2,
-			GroupRatioInfo:       hosttypes.GroupRatioInfo{GroupRatio: 1},
+			GroupRatioInfo:       hosttypes.GroupRatioInfo{GroupRatio: 1, ChannelRatio: 1},
 		},
 		StartTime: time.Now(),
 	}
@@ -402,7 +405,7 @@ func TestCalculateTextQuotaSummaryBillsOpenAICacheWriteTokens(t *testing.T) {
 			CompletionRatio:    2,
 			CacheRatio:         0.1,
 			CacheCreationRatio: 1.25,
-			GroupRatioInfo:     hosttypes.GroupRatioInfo{GroupRatio: 1},
+			GroupRatioInfo:     hosttypes.GroupRatioInfo{GroupRatio: 1, ChannelRatio: 1},
 		},
 		StartTime: time.Now(),
 	}
@@ -460,7 +463,7 @@ func TestCalculateTextQuotaSummarySeparatesOpenRouterCacheReadFromPromptBilling(
 			CompletionRatio:    1,
 			CacheRatio:         0.1,
 			CacheCreationRatio: 1.25,
-			GroupRatioInfo:     hosttypes.GroupRatioInfo{GroupRatio: 1},
+			GroupRatioInfo:     hosttypes.GroupRatioInfo{GroupRatio: 1, ChannelRatio: 1},
 		},
 		StartTime: time.Now(),
 	}
@@ -496,7 +499,7 @@ func TestCalculateTextQuotaSummarySeparatesOpenRouterCacheCreationFromPromptBill
 			ModelRatio:         1,
 			CompletionRatio:    1,
 			CacheCreationRatio: 1.25,
-			GroupRatioInfo:     hosttypes.GroupRatioInfo{GroupRatio: 1},
+			GroupRatioInfo:     hosttypes.GroupRatioInfo{GroupRatio: 1, ChannelRatio: 1},
 		},
 		StartTime: time.Now(),
 	}
@@ -533,7 +536,7 @@ func TestCalculateTextQuotaSummaryKeepsPrePRClaudeOpenRouterBilling(t *testing.T
 			CompletionRatio:    1,
 			CacheRatio:         0.1,
 			CacheCreationRatio: 1.25,
-			GroupRatioInfo:     hosttypes.GroupRatioInfo{GroupRatio: 1},
+			GroupRatioInfo:     hosttypes.GroupRatioInfo{GroupRatio: 1, ChannelRatio: 1},
 		},
 		StartTime: time.Now(),
 	}
@@ -572,7 +575,7 @@ func TestComposeTieredTextQuotaKeepsToolCallSurcharges(t *testing.T) {
 		PriceData: hosttypes.PriceData{
 			ModelRatio:      1,
 			CompletionRatio: 1,
-			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1},
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1, ChannelRatio: 1},
 		},
 		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{
 			BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
@@ -622,7 +625,7 @@ func TestComposeTieredTextQuotaFallbackKeepsToolCallSurcharges(t *testing.T) {
 		PriceData: hosttypes.PriceData{
 			ModelRatio:      1,
 			CompletionRatio: 1,
-			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1.25},
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1.25, ChannelRatio: 1},
 		},
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
 			BillingMode:               "tiered_expr",
@@ -656,7 +659,7 @@ func TestComposeTieredTextQuotaErrorFallbackUsesPreConsumedQuota(t *testing.T) {
 		PriceData: hosttypes.PriceData{
 			ModelRatio:      1,
 			CompletionRatio: 1,
-			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1.25},
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1.25, ChannelRatio: 1},
 		},
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
 			BillingMode:               "tiered_expr",
@@ -741,6 +744,7 @@ func TestCalculateTextQuotaSummaryFixedPriceAppliesImageCountOnceAndAllowsOverri
 		UsePrice:   true,
 		GroupRatioInfo: hosttypes.GroupRatioInfo{
 			GroupRatio: 1,
+			ChannelRatio: 1,
 		},
 	}
 	priceData.AddOtherRatio("n", 3)
@@ -904,6 +908,7 @@ func TestCalculateTextQuotaSummaryZeroTokensStillBillsToolSurcharge(t *testing.T
 		},
 	}
 	relayInfo.PriceData.GroupRatioInfo.GroupRatio = 1
+	relayInfo.PriceData.GroupRatioInfo.ChannelRatio = 1
 
 	usage := &dto.Usage{} // zero tokens, mirrors alpha search
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
@@ -924,7 +929,7 @@ func TestCalculateTextQuotaSummaryDoesNotApplyRequestMultipliersToToolSurcharge(
 		PriceData: hosttypes.PriceData{
 			ModelRatio:      1,
 			CompletionRatio: 1,
-			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1},
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1, ChannelRatio: 1},
 		},
 		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{
 			BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
@@ -1027,6 +1032,7 @@ func TestCalculateTextQuotaSummaryImageGenerationUsesStructuredSurcharge(t *test
 		},
 	}
 	relayInfo.PriceData.GroupRatioInfo.GroupRatio = 1
+	relayInfo.PriceData.GroupRatioInfo.ChannelRatio = 1
 	relayInfo.PriceData.ModelRatio = 1
 	relayInfo.PriceData.CompletionRatio = 1
 
@@ -1060,4 +1066,75 @@ func TestAppendToolSurchargeLogInfoWritesOnlyStructuredFields(t *testing.T) {
 	assert.NotContains(t, other, "file_search")
 	assert.NotContains(t, other, "image_generation_call")
 	assert.NotContains(t, other, "image_generation_call_price")
+}
+
+func TestCalculateTextQuotaSummaryAppliesChannelRatio(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+
+	relayInfo := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "gpt-4o",
+		PriceData: hosttypes.PriceData{
+			ModelRatio:      1,
+			CompletionRatio: 1,
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 2, ChannelRatio: 0.5},
+		},
+		StartTime: time.Now(),
+	}
+
+	usage := &dto.Usage{
+		PromptTokens:     100,
+		CompletionTokens: 0,
+		TotalTokens:      100,
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
+	// 100 tokens * modelRatio 1 * groupRatio 2 * channelRatio 0.5 = 100
+	require.Equal(t, 100, summary.Quota)
+	require.Equal(t, 0.5, summary.ChannelRatio)
+}
+
+func TestCalculateTextQuotaSummaryChannelRatioZeroIsFree(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+
+	relayInfo := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "gpt-4o",
+		PriceData: hosttypes.PriceData{
+			ModelRatio:      1,
+			CompletionRatio: 1,
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 2, ChannelRatio: 0},
+		},
+		StartTime: time.Now(),
+	}
+
+	usage := &dto.Usage{PromptTokens: 100, CompletionTokens: 0, TotalTokens: 100}
+	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
+	require.Equal(t, 0, summary.Quota)
+}
+
+func TestCalculateTextQuotaSummaryFixedPriceAppliesChannelRatio(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+
+	relayInfo := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "gpt-4o",
+		PriceData: hosttypes.PriceData{
+			UsePrice:       true,
+			ModelPrice:     1,
+			GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 2, ChannelRatio: 0.5},
+		},
+		StartTime: time.Now(),
+	}
+
+	usage := &dto.Usage{PromptTokens: 1, CompletionTokens: 0, TotalTokens: 1}
+	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
+	// 1 * QuotaPerUnit * groupRatio 2 * channelRatio 0.5 = QuotaPerUnit
+	require.Equal(t, int(common.QuotaPerUnit), summary.Quota)
 }

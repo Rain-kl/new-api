@@ -3,10 +3,10 @@ package controller
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
@@ -355,4 +355,50 @@ func TestTestAllChannelsRejectsExistingActiveTask(t *testing.T) {
 	require.Equal(t, http.StatusConflict, recorder.Code)
 	require.Contains(t, recorder.Body.String(), existing.TaskID)
 	require.Contains(t, recorder.Body.String(), "已有通道测试任务正在运行或等待中")
+}
+
+func TestValidateChannelRatio(t *testing.T) {
+	zero := 0.0
+	one := 1.0
+	hundred := 100.0
+	negative := -0.1
+	tooHigh := 100.01
+	nan := math.NaN()
+	posInf := math.Inf(1)
+
+	base := func(ratio *float64) *model.Channel {
+		return &model.Channel{
+			Type:   constant.ChannelTypeOpenAI,
+			Name:   "ratio-test",
+			Key:    "sk-test",
+			Models: "gpt-4o",
+			Group:  "default",
+			Ratio:  ratio,
+		}
+	}
+
+	cases := []struct {
+		name    string
+		ratio   *float64
+		wantErr bool
+	}{
+		{"nil defaults to no adjustment", nil, false},
+		{"zero means free channel", &zero, false},
+		{"one is neutral", &one, false},
+		{"hundred is max allowed", &hundred, false},
+		{"negative rejected", &negative, true},
+		{"above 100 rejected", &tooHigh, true},
+		{"NaN rejected", &nan, true},
+		{"+Inf rejected", &posInf, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateChannel(base(tc.ratio), false)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }

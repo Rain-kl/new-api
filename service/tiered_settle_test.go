@@ -353,7 +353,7 @@ func TestPrepareTieredBillingForSelectedGroupUpdatesReservation(t *testing.T) {
 			QuotaPerUnit:              testQuotaPerUnit,
 		},
 		PriceData: types.PriceData{
-			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 0.20},
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 0.20, ChannelRatio: 1},
 		},
 	}
 
@@ -390,7 +390,7 @@ func TestPrepareTieredBillingForSelectedGroupStartsBillingAfterFreeGroup(t *test
 		},
 		PriceData: types.PriceData{
 			FreeModel:      true,
-			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 0.20},
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 0.20, ChannelRatio: 1},
 		},
 	}
 	ctx, _ := gin.CreateTestContext(nil)
@@ -423,7 +423,7 @@ func TestPrepareTieredBillingForSelectedGroupPaidToFreeKeepsFreeModelFalse(t *te
 			QuotaPerUnit:              testQuotaPerUnit,
 		},
 		PriceData: types.PriceData{
-			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 0},
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 0, ChannelRatio: 1},
 		},
 	}
 
@@ -461,7 +461,7 @@ func TestPrepareTieredBillingForSelectedGroupTopUpArrearsAllowsNegativeBalance(t
 			QuotaPerUnit:              testQuotaPerUnit,
 		},
 		PriceData: types.PriceData{
-			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 0.20},
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 0.20, ChannelRatio: 1},
 		},
 	}
 	session := &BillingSession{
@@ -540,7 +540,7 @@ func TestTryTieredSettleUsesFinalGroupAfterRetry(t *testing.T) {
 					QuotaPerUnit:              testQuotaPerUnit,
 				},
 				PriceData: types.PriceData{
-					GroupRatioInfo: types.GroupRatioInfo{GroupRatio: tt.finalGroupRatio},
+					GroupRatioInfo: types.GroupRatioInfo{GroupRatio: tt.finalGroupRatio, ChannelRatio: 1},
 				},
 			}
 
@@ -1023,4 +1023,31 @@ func BenchmarkRatioBilling_Parallel(b *testing.B) {
 			ratioQuota(usage, false, 1.5, 5.0, 0.1, 1.0, 1.5)
 		}
 	})
+}
+
+func TestRefreshTieredBillingGroupRefreshesChannelRatio(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const expr = `tier("base", p)`
+	initialChannelRatio := 1.0
+	relayInfo := &relaycommon.RelayInfo{
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode:               "tiered_expr",
+			ExprString:                expr,
+			ExprHash:                  billingexpr.ExprHashString(expr),
+			GroupRatio:                2.0,
+			ChannelRatio:              &initialChannelRatio,
+			EstimatedQuotaBeforeGroup: 1000,
+			EstimatedQuotaAfterGroup:  2000,
+			QuotaPerUnit:              testQuotaPerUnit,
+		},
+		PriceData: types.PriceData{
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 2.0, ChannelRatio: 0.5},
+		},
+	}
+
+	snap, err := refreshTieredBillingGroup(relayInfo)
+	require.NoError(t, err)
+	require.Equal(t, 0.5, *snap.ChannelRatio)
+	require.Equal(t, 1000, snap.EstimatedQuotaAfterGroup) // 1000 * 2 * 0.5
 }

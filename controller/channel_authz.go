@@ -33,6 +33,9 @@ func channelHasSensitiveChanges(channel *PatchChannel, origin *model.Channel, re
 	if _, ok := requestData["key_mode"]; ok && channel.KeyMode != nil {
 		return true
 	}
+	if _, ok := requestData["ratio"]; ok && channelRatioChanged(channel, origin) {
+		return true
+	}
 	// Fail closed: any field present in the request that is neither a known
 	// sensitive field (gated above) nor an explicitly classified non-sensitive
 	// field must be treated as sensitive. This keeps a newly added channel field
@@ -56,6 +59,22 @@ func channelHasSensitiveChanges(channel *PatchChannel, origin *model.Channel, re
 	return false
 }
 
+// channelRatioChanged reports whether the requested ratio differs from the
+// stored one, treating nil (unset) as the default 1.0. This keeps legacy
+// channels (ratio column NULL) from tripping the sensitive gate when the
+// frontend sends the default value back unchanged.
+func channelRatioChanged(channel *PatchChannel, origin *model.Channel) bool {
+	got := 1.0
+	if channel.Ratio != nil {
+		got = *channel.Ratio
+	}
+	want := 1.0
+	if origin.Ratio != nil {
+		want = *origin.Ratio
+	}
+	return got != want
+}
+
 // channelSensitiveFields lists the channel fields whose modification requires
 // ChannelSensitiveWrite. They are each checked individually in
 // channelHasSensitiveChanges with a precise old-vs-new comparison; this set is
@@ -71,6 +90,7 @@ var channelSensitiveFields = map[string]struct{}{
 	"other":               {},
 	"settings":            {},
 	"key_mode":            {},
+	"ratio":               {},
 }
 
 // channelOperationalFields lists fields managed by operation endpoints instead

@@ -248,6 +248,7 @@ export const ERROR_MESSAGES = {
   INVALID_PROXY:
     'Proxy address must use HTTP, HTTPS, SOCKS5, or SOCKS5H and include a valid host',
   INVALID_HTTP_PROTOCOL: 'HTTP protocol must be Auto or HTTP/1.1',
+  INVALID_RATIO: 'Channel ratio must be between 0 and 100',
   INVALID_HTTP2_CONNECTION_SHARDS:
     'HTTP/2 connection shards must be between 1 and 8',
   INVALID_HTTP1_WITH_SHARDS:
@@ -291,6 +292,7 @@ export const DEFAULT_CHANNEL_VALUES = {
   status: CHANNEL_STATUS.ENABLED,
   priority: 0,
   weight: 0,
+  ratio: 1,
   auto_ban: 1,
   remark: '',
 } as const
@@ -372,6 +374,7 @@ export const FIELD_DESCRIPTIONS = {
   MODEL_MAPPING:
     'Map request model names to actual provider model names (JSON format)',
   PRIORITY: 'Higher priority channels are selected first',
+  RATIO: 'Channel ratio (0 = free channel, 1 = no adjustment)',
   WEIGHT: 'Used for load balancing. Higher weight = more requests',
   TEST_MODEL: 'Model to use when testing channel connectivity',
   AUTO_BAN: 'Automatically disable channel on repeated failures',

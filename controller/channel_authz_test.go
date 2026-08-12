@@ -94,6 +94,23 @@ func TestChannelHasSensitiveChanges(t *testing.T) {
 			"response_time": updated.ResponseTime,
 		}))
 	})
+
+	t.Run("ratio change requires sensitive write", func(t *testing.T) {
+		updated := PatchChannel{Channel: *origin}
+		ratio := 0.5
+		updated.Ratio = &ratio
+
+		assert.True(t, channelHasSensitiveChanges(&updated, origin, map[string]any{"ratio": ratio}))
+	})
+
+	t.Run("unchanged ratio is not sensitive even for legacy nil channels", func(t *testing.T) {
+		updated := PatchChannel{Channel: *origin}
+		// origin.Ratio is nil; frontend sends the effective default back
+		ratio := 1.0
+		updated.Ratio = &ratio
+
+		assert.False(t, channelHasSensitiveChanges(&updated, origin, map[string]any{"ratio": ratio}))
+	})
 }
 
 func TestClearChannelReadOnlyFields(t *testing.T) {
