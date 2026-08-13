@@ -349,14 +349,15 @@ func CheckProxyQuality(c *gin.Context) {
 	common.ApiSuccess(c, result)
 }
 
-// GetProxyChannels lists channels bound to a proxy.
+// GetProxyChannels lists all channels for a proxy binding UI.
+// Bound channels come first (Bound=true), unbound channels after.
 func GetProxyChannels(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	channels, err := model.ListChannelsByProxyID(id)
+	channels, err := model.ListChannelsForProxyBinding(id)
 	if err != nil {
 		common.ApiError(c, err)
 		return

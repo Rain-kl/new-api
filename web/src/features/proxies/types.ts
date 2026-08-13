@@ -177,6 +177,7 @@ export interface ProxyChannelSummary {
   type?: number
   status?: number
   group?: string
+  bound?: boolean
 }
 
 export interface ProxyExportPayload {

@@ -126,6 +126,47 @@ func TestSetChannelsProxyAndCount(t *testing.T) {
 	assert.Equal(t, p.URL(), s.Proxy)
 }
 
+func TestListChannelsForProxyBinding_BoundFirstThenUnbound(t *testing.T) {
+	setupProxyTestDB(t)
+	p := &Proxy{Name: "p", Protocol: "http", Host: "h", Port: 8080}
+	require.NoError(t, p.Insert())
+
+	ch1 := &Channel{Name: "c1", Key: "k1", Status: 1}
+	ch2 := &Channel{Name: "c2", Key: "k2", Status: 1}
+	ch3 := &Channel{Name: "c3", Key: "k3", Status: 1}
+	require.NoError(t, DB.Create(ch1).Error)
+	require.NoError(t, DB.Create(ch2).Error)
+	require.NoError(t, DB.Create(ch3).Error)
+
+	// Bind ch1 and ch3 to the proxy; ch2 stays unbound.
+	n, err := SetChannelsProxy([]int{ch1.Id, ch3.Id}, p.Id, p.URL())
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+
+	rows, err := ListChannelsForProxyBinding(p.Id)
+	require.NoError(t, err)
+	require.Len(t, rows, 3)
+
+	// Every channel is listed; bound channels come first (by id), then unbound.
+	assert.Equal(t, []int{ch1.Id, ch3.Id, ch2.Id},
+		[]int{rows[0].Id, rows[1].Id, rows[2].Id})
+	assert.True(t, rows[0].Bound)
+	assert.True(t, rows[1].Bound)
+	assert.False(t, rows[2].Bound)
+}
+
+func TestListChannelsForProxyBinding_UnboundProxy(t *testing.T) {
+	setupProxyTestDB(t)
+	ch := &Channel{Name: "c", Key: "k", Status: 1}
+	require.NoError(t, DB.Create(ch).Error)
+
+	// A proxy id that binds nothing still lists all channels as unbound.
+	rows, err := ListChannelsForProxyBinding(999)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.False(t, rows[0].Bound)
+}
+
 func TestApplyProxyURLToChannels(t *testing.T) {
 	setupProxyTestDB(t)
 	p := &Proxy{Name: "p", Protocol: "http", Host: "h", Port: 8080}

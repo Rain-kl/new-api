@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -375,12 +376,14 @@ func GetProxiesByIds(ids []int) ([]*Proxy, error) {
 }
 
 // ChannelSummaryForProxy is a lightweight channel row for proxy binding UIs.
+// Bound reports whether the channel is currently bound to the proxy in question.
 type ChannelSummaryForProxy struct {
 	Id     int    `json:"id"`
 	Name   string `json:"name"`
 	Type   int    `json:"type"`
 	Status int    `json:"status"`
 	Group  string `json:"group"`
+	Bound  bool   `json:"bound"`
 }
 
 // channelsLikelyBoundToProxy pre-filters channels that may reference proxy_id in setting JSON.
@@ -417,10 +420,12 @@ func CountChannelsByProxyID(proxyId int) (int64, error) {
 	return int64(len(channels)), nil
 }
 
-// ListChannelsByProxyID returns channel summaries bound to the managed proxy.
-func ListChannelsByProxyID(proxyId int) ([]ChannelSummaryForProxy, error) {
-	channels, err := channelsBoundToProxyID(proxyId)
-	if err != nil {
+// ListChannelsForProxyBinding returns every channel with a Bound flag reporting
+// whether it is currently bound to the given managed proxy. Bound channels come
+// first, then unbound channels, each ordered by id.
+func ListChannelsForProxyBinding(proxyId int) ([]ChannelSummaryForProxy, error) {
+	var channels []Channel
+	if err := DB.Omit("key").Order("id asc").Find(&channels).Error; err != nil {
 		return nil, err
 	}
 	out := make([]ChannelSummaryForProxy, 0, len(channels))
@@ -431,8 +436,15 @@ func ListChannelsByProxyID(proxyId int) ([]ChannelSummaryForProxy, error) {
 			Type:   ch.Type,
 			Status: ch.Status,
 			Group:  ch.Group,
+			Bound:  proxyId > 0 && ch.GetSetting().ProxyId == proxyId,
 		})
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Bound != out[j].Bound {
+			return out[i].Bound
+		}
+		return out[i].Id < out[j].Id
+	})
 	return out, nil
 }
 
