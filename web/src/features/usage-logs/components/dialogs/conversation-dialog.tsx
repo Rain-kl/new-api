@@ -141,7 +141,7 @@ export function ConversationDialog({
             <div className='max-h-[50vh] overflow-auto pr-10 text-xs'>
               <ReactJson
                 src={parsedJson}
-                collapsed={true}
+                collapsed={1}
                 theme={jsonTheme}
                 displayDataTypes={false}
                 displayObjectSize={true}
