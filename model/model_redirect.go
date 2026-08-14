@@ -14,9 +14,9 @@ import (
 // ModelRedirect is a virtual model name with an ordered channel+model fallback chain.
 // Personal feature — registered via RegisterMainDBModel (low-conflict migrate).
 type ModelRedirect struct {
-	Id            int                   `json:"id" gorm:"primaryKey;autoIncrement"`
-	Name          string                `json:"name" gorm:"size:128;uniqueIndex;not null"` // virtual model name
-	Groups        string                `json:"groups" gorm:"type:text"`                   // comma-separated
+	Id     int    `json:"id" gorm:"primaryKey;autoIncrement"`
+	Name   string `json:"name" gorm:"size:128;uniqueIndex;not null"` // virtual model name
+	Groups string `json:"groups" gorm:"type:text"`                   // comma-separated
 	// No gorm default tag on Enabled: the `default:true` tag makes GORM omit the
 	// false zero value on Create (stored as enabled). The true default is enforced
 	// in CreateModelRedirect / UpdateModelRedirect, so the tag is unnecessary.
@@ -36,9 +36,9 @@ type ModelRedirect struct {
 // a load-balancing pool (currently equal share; Weight is reserved for future
 // weighted balancing and is not applied yet).
 type ModelRedirectTarget struct {
-	Id         int    `json:"id" gorm:"primaryKey;autoIncrement"`
-	RedirectId int    `json:"redirect_id" gorm:"index;not null"`
-	Priority   int    `json:"priority" gorm:"not null;default:100"` // higher = preferred
+	Id         int `json:"id" gorm:"primaryKey;autoIncrement"`
+	RedirectId int `json:"redirect_id" gorm:"index;not null"`
+	Priority   int `json:"priority" gorm:"not null;default:100"` // higher = preferred
 	// Weight is reserved for future weighted LB among same-priority targets.
 	// 0 means "equal share" (current behaviour). Non-zero values are stored but
 	// not yet applied at resolve time.
@@ -528,9 +528,14 @@ func GetChannelForRedirect(channelID int) (*Channel, error) {
 
 // FirstUsableRedirectCandidate returns the first candidate that yields a usable
 // channel (accessible, not cooled) together with that channel and the attempt
-// model. Model-only candidates are resolved through the channel layer for their
-// model. Returns (nil, "", -1) when no candidate is usable.
-func FirstUsableRedirectCandidate(cands []RedirectCandidate, clientModel, group, requestPath string) (*Channel, string, int) {
+// model. Model-only candidates walk channel-priority tiers (0 .. modelSlots-1),
+// mirroring the retry-path slot resolution, so a cooled top-priority channel
+// falls through to the next tier instead of skipping the whole model. Returns
+// (nil, "", -1) when no candidate is usable.
+func FirstUsableRedirectCandidate(cands []RedirectCandidate, clientModel, group, requestPath string, modelSlots int) (*Channel, string, int) {
+	if modelSlots < 1 {
+		modelSlots = 1
+	}
 	for i, cand := range cands {
 		if cand.ChannelID > 0 {
 			ch, err := GetChannelForRedirect(cand.ChannelID)
@@ -543,14 +548,16 @@ func FirstUsableRedirectCandidate(cands []RedirectCandidate, clientModel, group,
 			return ch, AttemptModel(clientModel, cand), i
 		}
 		if cand.IsModelOnly() {
-			ch, _ := GetRandomSatisfiedChannel(group, cand.Model, 0, requestPath)
-			if ch == nil {
-				continue
+			for level := 0; level < modelSlots; level++ {
+				ch, _ := GetRandomSatisfiedChannel(group, cand.Model, level, requestPath)
+				if ch == nil {
+					break
+				}
+				if IsModelRedirectHopDisabled(ch.Id, cand.Model) {
+					continue
+				}
+				return ch, cand.Model, i
 			}
-			if IsModelRedirectHopDisabled(ch.Id, cand.Model) {
-				continue
-			}
-			return ch, cand.Model, i
 		}
 	}
 	return nil, "", -1
@@ -616,7 +623,7 @@ type ModelRedirectInput struct {
 }
 
 type ModelRedirectTargetInput struct {
-	Priority  int    `json:"priority"`
+	Priority int `json:"priority"`
 	// Weight is optional/reserved for future weighted LB among same priority.
 	// 0 or omitted = equal share (current behaviour).
 	Weight    *int   `json:"weight,omitempty"`

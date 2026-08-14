@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -125,7 +126,7 @@ func TestFilterRedirectCooldownDown_PassthroughAndKeyIsolation(t *testing.T) {
 	RecordModelRedirectHopFailure(2, "other")
 
 	cands := []RedirectCandidate{
-		{ChannelID: 1, Model: "", Priority: 100},      // AttemptModel → "virtual" → cooled
+		{ChannelID: 1, Model: "", Priority: 100},        // AttemptModel → "virtual" → cooled
 		{ChannelID: 1, Model: "explicit", Priority: 90}, // different key
 		{ChannelID: 2, Model: "other", Priority: 80},    // cooled
 		{ChannelID: 3, Model: "ok", Priority: 70},
@@ -182,4 +183,55 @@ func TestFilterRedirectCooldownDown_KeepsModelOnly(t *testing.T) {
 	out := FilterRedirectCooldownDown(cands, "auto")
 	require.Len(t, out, 1)
 	assert.Equal(t, "gpt-5.6", out[0].Model)
+}
+
+// Regression: a model-only redirect candidate whose top-priority channel is in
+// hop cooldown must fall through to the next channel-priority tier instead of
+// skipping the whole model and moving on to the next redirect target.
+func TestFirstUsableRedirectCandidate_ModelOnlyWalksTiersPastCooldown(t *testing.T) {
+	setupModelRedirectTestDB(t)
+	resetModelRedirectCooldownsForTest()
+	t.Cleanup(resetModelRedirectCooldownsForTest)
+
+	origStep := modelRedirectCooldownStep
+	origNow := modelRedirectNow
+	t.Cleanup(func() {
+		modelRedirectCooldownStep = origStep
+		modelRedirectNow = origNow
+	})
+	modelRedirectCooldownStep = time.Minute
+	base := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	modelRedirectNow = func() time.Time { return base }
+
+	prevMem := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false // select channels via the DB (abilities) path
+	t.Cleanup(func() { common.MemoryCacheEnabled = prevMem })
+
+	// Top-priority channel 9011 (will be cooled) and lower-priority channel 9012,
+	// both serving model "gpt-5.6" for group "default".
+	require.NoError(t, DB.Create(&Channel{Id: 9011, Name: "c-top", Type: 1, Key: "k1", Models: "gpt-5.6", Group: "default"}).Error)
+	require.NoError(t, DB.Create(&Channel{Id: 9012, Name: "c-low", Type: 1, Key: "k2", Models: "gpt-5.6", Group: "default"}).Error)
+	t.Cleanup(func() {
+		_ = DB.Where("channel_id IN ?", []int{9011, 9012}).Delete(&Ability{}).Error
+		_ = DB.Where("id IN ?", []int{9011, 9012}).Delete(&Channel{}).Error
+	})
+
+	top := int64(10)
+	low := int64(0)
+	require.NoError(t, DB.Create(&Ability{Group: "default", Model: "gpt-5.6", ChannelId: 9011, Enabled: true, Priority: &top, Weight: 10}).Error)
+	require.NoError(t, DB.Create(&Ability{Group: "default", Model: "gpt-5.6", ChannelId: 9012, Enabled: true, Priority: &low, Weight: 10}).Error)
+
+	// Cool the top-priority hop only; the lower tier must remain reachable.
+	RecordModelRedirectHopFailure(9011, "gpt-5.6")
+
+	cands := []RedirectCandidate{
+		{ChannelID: 0, Model: "gpt-5.6", Priority: 100},
+		{ChannelID: 0, Model: "claude-5", Priority: 50},
+	}
+
+	ch, model, idx := FirstUsableRedirectCandidate(cands, "flash", "default", "/v1/chat/completions", 2)
+	require.NotNil(t, ch)
+	assert.Equal(t, 9012, ch.Id)
+	assert.Equal(t, "gpt-5.6", model)
+	assert.Equal(t, 0, idx)
 }

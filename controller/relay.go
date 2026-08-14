@@ -448,7 +448,9 @@ func modelRedirectHopAttemptModel(c *gin.Context) string {
 
 // shouldCoolModelRedirectHop reports whether the error indicates hop/upstream
 // unavailability (independent of remaining retry budget). Client/local skip-retry
-// errors do not cool a hop.
+// errors do not cool a hop. Status-code based cooling follows the configured
+// auto-disable status codes (routing-reliability "Auto-disable status codes"),
+// so a hop is only cooled for the failures the operator asked to disable on.
 func shouldCoolModelRedirectHop(openaiErr *types.NewAPIError) bool {
 	if openaiErr == nil {
 		return false
@@ -469,16 +471,7 @@ func shouldCoolModelRedirectHop(openaiErr *types.NewAPIError) bool {
 	if code < 100 || code > 599 {
 		return true
 	}
-	// Same HA set as model-redirect shouldRetry branch (401/403/404/429/408/5xx).
-	if code == http.StatusUnauthorized ||
-		code == http.StatusForbidden ||
-		code == http.StatusNotFound ||
-		code == http.StatusTooManyRequests ||
-		code == http.StatusRequestTimeout ||
-		code >= http.StatusInternalServerError {
-		return true
-	}
-	return operation_setting.ShouldRetryByStatusCode(code)
+	return operation_setting.ShouldDisableByStatusCode(code)
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {

@@ -85,7 +85,7 @@ func tryModelRedirectSelection(
 	// Pick the first usable candidate. Model-only hops resolve a channel through
 	// the channel layer for the mapped model at pick time; channel-bound hops load
 	// the concrete channel. Earlier unusable hops are excluded from the retry list.
-	firstCh, firstModel, firstIdx := model.FirstUsableRedirectCandidate(filtered, clientModel, effectiveGroup, requestPath)
+	firstCh, firstModel, firstIdx := model.FirstUsableRedirectCandidate(filtered, clientModel, effectiveGroup, requestPath, common.RetryTimes+1)
 	if firstCh == nil {
 		abortWithRelayMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": clientModel}), types.ErrorCodeModelNotFound)
 		return nil, "", "", true, true
