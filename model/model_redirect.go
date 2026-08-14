@@ -586,11 +586,43 @@ func redirectSlotMapping(cands []RedirectCandidate, slot, modelSlots int) (candI
 	return 0, 0, false
 }
 
-// ResolveRedirectSlot resolves the slot-th attempt of an ordered candidate list
-// to a channel + attempt model. Channel-bound candidates occupy one slot each;
-// model-only candidates occupy modelSlots slots (one per channel-priority tier).
-// Returns (nil, "") when the slot is beyond the list or the hop cannot resolve.
-func ResolveRedirectSlot(cands []RedirectCandidate, slot int, clientModel, group, requestPath string, modelSlots int) (*Channel, string) {
+// RedirectSlotCount returns the total number of retry slots a candidate list
+// spans: channel-bound candidates occupy 1 slot each, model-only candidates
+// occupy modelSlots slots each (one per channel-priority tier).
+func RedirectSlotCount(cands []RedirectCandidate, modelSlots int) int {
+	if modelSlots < 1 {
+		modelSlots = 1
+	}
+	total := 0
+	for _, cand := range cands {
+		if cand.IsModelOnly() {
+			total += modelSlots
+		} else {
+			total++
+		}
+	}
+	return total
+}
+
+// ResolveRedirectSlot resolves the first usable slot at or after slot, returning
+// the channel, the attempt model, and the actual slot index used. Slots whose
+// candidate has no usable channel are skipped, so an exhausted hop falls through
+// to the next redirect candidate instead of aborting the whole request. Returns
+// (nil, "", slot) when every remaining slot is unusable.
+func ResolveRedirectSlot(cands []RedirectCandidate, slot int, clientModel, group, requestPath string, modelSlots int) (*Channel, string, int) {
+	total := RedirectSlotCount(cands, modelSlots)
+	for s := slot; s < total; s++ {
+		channel, attemptModel := resolveRedirectSlotAt(cands, s, clientModel, group, requestPath, modelSlots)
+		if channel != nil {
+			return channel, attemptModel, s
+		}
+	}
+	return nil, "", slot
+}
+
+// resolveRedirectSlotAt resolves a single slot to a channel + attempt model, or
+// (nil, "") when the slot's candidate has no usable channel.
+func resolveRedirectSlotAt(cands []RedirectCandidate, slot int, clientModel, group, requestPath string, modelSlots int) (*Channel, string) {
 	candIdx, level, ok := redirectSlotMapping(cands, slot, modelSlots)
 	if !ok {
 		return nil, ""
@@ -603,11 +635,14 @@ func ResolveRedirectSlot(cands []RedirectCandidate, slot int, clientModel, group
 		}
 		return ch, AttemptModel(clientModel, cand)
 	}
-	ch, _ := GetRandomSatisfiedChannel(group, cand.Model, level, requestPath)
-	if ch == nil {
-		return nil, ""
+	if cand.IsModelOnly() {
+		ch, _ := GetRandomSatisfiedChannel(group, cand.Model, level, requestPath)
+		if ch == nil {
+			return nil, ""
+		}
+		return ch, cand.Model
 	}
-	return ch, cand.Model
+	return nil, ""
 }
 
 // ----- CRUD -----

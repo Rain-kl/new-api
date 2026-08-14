@@ -1094,12 +1094,13 @@ func TestResolveRedirectSlot_ChannelBound(t *testing.T) {
 	cands := []RedirectCandidate{
 		{ChannelID: 9007, Model: "gpt-4o", Priority: 10},
 	}
-	ch, model := ResolveRedirectSlot(cands, 0, "ha", "default", "/v1/chat/completions", 3)
+	ch, model, slot := ResolveRedirectSlot(cands, 0, "ha", "default", "/v1/chat/completions", 3)
 	require.NotNil(t, ch)
 	assert.Equal(t, 9007, ch.Id)
 	assert.Equal(t, "gpt-4o", model)
+	assert.Equal(t, 0, slot)
 
-	ch2, _ := ResolveRedirectSlot(cands, 1, "ha", "default", "/v1/chat/completions", 3)
+	ch2, _, _ := ResolveRedirectSlot(cands, 1, "ha", "default", "/v1/chat/completions", 3)
 	require.Nil(t, ch2, "channel-bound candidate spans exactly one slot")
 }
 
@@ -1109,6 +1110,7 @@ func TestResolveRedirectSlot_ModelOnlyProbe(t *testing.T) {
 	common.MemoryCacheEnabled = false // tests select channels via the DB (abilities) path
 	t.Cleanup(func() {
 		common.MemoryCacheEnabled = prevMem
+		_ = DB.Where("channel_id = ?", 9003).Delete(&Ability{}).Error
 		_ = DB.Where("id = ?", 9003).Delete(&Channel{}).Error
 	})
 	require.NoError(t, DB.Create(&Channel{Id: 9003, Name: "c3", Type: 1, Key: "k3", Models: "gpt-5.6", Group: "default"}).Error)
@@ -1119,8 +1121,40 @@ func TestResolveRedirectSlot_ModelOnlyProbe(t *testing.T) {
 		{ChannelID: 0, Model: "gpt-5.6", Priority: 5},
 	}
 	// slot 0 -> tier 0 selects the seeded channel
-	ch, model := ResolveRedirectSlot(cands, 0, "auto", "default", "/v1/chat/completions", 3)
+	ch, model, slot := ResolveRedirectSlot(cands, 0, "auto", "default", "/v1/chat/completions", 3)
 	require.NotNil(t, ch)
 	assert.Equal(t, 9003, ch.Id)
 	assert.Equal(t, "gpt-5.6", model)
+	assert.Equal(t, 0, slot)
+}
+
+// Regression: a model-only redirect candidate with no usable channel must be
+// skipped so resolution falls through to the next candidate instead of aborting.
+func TestResolveRedirectSlot_SkipsCandidateWithoutChannel(t *testing.T) {
+	setupModelRedirectTestDB(t)
+	prevMem := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false // tests select channels via the DB (abilities) path
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = prevMem
+		_ = DB.Where("channel_id = ?", 9008).Delete(&Ability{}).Error
+		_ = DB.Where("id = ?", 9008).Delete(&Channel{}).Error
+	})
+
+	// Only "gpt-5.6-skip" has a channel; "glm-none-target" has none.
+	require.NoError(t, DB.Create(&Channel{Id: 9008, Name: "c8", Type: 1, Key: "k8", Models: "gpt-5.6-skip", Group: "default"}).Error)
+	prio := int64(10)
+	require.NoError(t, DB.Create(&Ability{Group: "default", Model: "gpt-5.6-skip", ChannelId: 9008, Enabled: true, Priority: &prio, Weight: 10}).Error)
+
+	cands := []RedirectCandidate{
+		{ChannelID: 0, Model: "glm-none-target", Priority: 110},
+		{ChannelID: 0, Model: "gpt-5.6-skip", Priority: 80},
+	}
+
+	// slot 0 (glm-none-target) has no channel; resolution must skip its two
+	// slots [0,2) and land on gpt-5.6-skip at slot 2.
+	ch, model, slot := ResolveRedirectSlot(cands, 0, "auto", "default", "/v1/chat/completions", 2)
+	require.NotNil(t, ch)
+	assert.Equal(t, 9008, ch.Id)
+	assert.Equal(t, "gpt-5.6-skip", model)
+	assert.Equal(t, 2, slot)
 }

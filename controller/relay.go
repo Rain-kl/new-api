@@ -193,17 +193,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	relayInfo.LastError = nil
 
 	// Model redirect: allow up to len(candidates) attempts even when RetryTimes=0.
-	// Model-only candidates each get RetryTimes+1 channel-tier slots (the same
-	// budget a normal request for the mapped model would have).
+	// Each model-only candidate gets RetryTimes+1 channel-tier slots (the same
+	// budget a normal request for the mapped model would have); RetryTimes only
+	// limits channel retries within a hop and never the hop chain itself.
 	maxRetry := common.RetryTimes
 	if cands, ok := getModelRedirectCandidates(c); ok && len(cands) > 0 {
-		modelOnlyCount := 0
-		for _, cand := range cands {
-			if cand.IsModelOnly() {
-				modelOnlyCount++
-			}
-		}
-		if n := len(cands) - 1 + modelOnlyCount*common.RetryTimes; n > maxRetry {
+		if n := model.RedirectSlotCount(cands, common.RetryTimes+1) - 1; n > maxRetry {
 			maxRetry = n
 		}
 	}
@@ -375,11 +370,14 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 			clientModel = info.OriginModelName
 		}
 		group := common.GetContextKeyString(c, constant.ContextKeyModelRedirectGroup)
-		channel, attemptModel := model.ResolveRedirectSlot(
+		channel, attemptModel, usedSlot := model.ResolveRedirectSlot(
 			cands, idx, clientModel, group, common.NormalizeRelaySelectionPath(c.Request.URL.Path), common.RetryTimes+1)
 		if channel == nil {
 			return nil, types.NewError(fmt.Errorf("model redirect candidates exhausted"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 		}
+		// Align the loop's retry counter with the slot actually used so hops with
+		// no usable channel are skipped instead of being re-resolved every round.
+		retryParam.SetRetry(usedSlot)
 		if setupErr := middleware.SetupContextForSelectedChannel(c, channel, attemptModel); setupErr != nil {
 			return nil, setupErr
 		}
@@ -448,9 +446,10 @@ func modelRedirectHopAttemptModel(c *gin.Context) string {
 
 // shouldCoolModelRedirectHop reports whether the error indicates hop/upstream
 // unavailability (independent of remaining retry budget). Client/local skip-retry
-// errors do not cool a hop. Status-code based cooling follows the configured
-// auto-disable status codes (routing-reliability "Auto-disable status codes"),
-// so a hop is only cooled for the failures the operator asked to disable on.
+// errors do not cool a hop. Status-code based cooling covers the configured
+// auto-disable status codes (routing-reliability "Auto-disable status codes")
+// plus transient hop-unavailability statuses (auth, rate limit, timeout, server
+// errors). Client errors such as 400 are not hop-unavailability.
 func shouldCoolModelRedirectHop(openaiErr *types.NewAPIError) bool {
 	if openaiErr == nil {
 		return false
@@ -471,7 +470,15 @@ func shouldCoolModelRedirectHop(openaiErr *types.NewAPIError) bool {
 	if code < 100 || code > 599 {
 		return true
 	}
-	return operation_setting.ShouldDisableByStatusCode(code)
+	if operation_setting.ShouldDisableByStatusCode(code) {
+		return true
+	}
+	return code == http.StatusUnauthorized ||
+		code == http.StatusForbidden ||
+		code == http.StatusNotFound ||
+		code == http.StatusTooManyRequests ||
+		code == http.StatusRequestTimeout ||
+		code >= http.StatusInternalServerError
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
