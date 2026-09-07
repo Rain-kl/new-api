@@ -490,28 +490,30 @@ export function LogSettingsSection({
                 open={showConversationConfirm}
                 onOpenChange={setShowConversationConfirm}
               >
-                <AlertDialogTrigger asChild>
-                  <Button
-                    type='button'
-                    variant='destructive'
-                    disabled={
-                      isCleaningConversation || !conversationPurgeTimestamp
-                    }
-                    onClick={(e) => {
-                      if (!conversationPurgeTimestamp) {
-                        e.preventDefault()
-                        toast.error(
-                          t(
-                            'Select a timestamp before clearing conversation records.'
-                          )
-                        )
+                <AlertDialogTrigger
+                  render={
+                    <Button
+                      type='button'
+                      variant='destructive'
+                      disabled={
+                        isCleaningConversation || !conversationPurgeTimestamp
                       }
-                    }}
-                  >
-                    {isCleaningConversation
-                      ? t('Cleaning...')
-                      : t('Clean conversation records')}
-                  </Button>
+                      onClick={(e) => {
+                        if (!conversationPurgeTimestamp) {
+                          e.preventDefault()
+                          toast.error(
+                            t(
+                              'Select a timestamp before clearing conversation records.'
+                            )
+                          )
+                        }
+                      }}
+                    />
+                  }
+                >
+                  {isCleaningConversation
+                    ? t('Cleaning...')
+                    : t('Clean conversation records')}
                 </AlertDialogTrigger>
                 <AlertDialogContent>
                   <AlertDialogHeader>

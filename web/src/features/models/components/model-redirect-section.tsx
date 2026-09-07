@@ -587,6 +587,7 @@ function ModelRedirectRowActions(props: {
   onEdit: () => void
   onChanged: () => void
 }) {
+  const { t } = useTranslation()
   const item = props.row.original
   const [deleteOpen, setDeleteOpen] = useState(false)
 
@@ -650,7 +651,7 @@ function ModelRedirectRowActions(props: {
         <TooltipContent>{toggleLabel}</TooltipContent>
       </Tooltip>
 
-      <DataTableRowActionMenu>
+      <DataTableRowActionMenu ariaLabel={t('Actions')}>
         <DropdownMenuItem onClick={props.onEdit}>
           编辑
           <DropdownMenuShortcut>
@@ -1207,7 +1208,7 @@ function RedirectTargetCard(props: {
           onValueChange={(v) =>
             props.onChange({
               model:
-                !isNested && v === PASSTHROUGH_MODEL_VALUE ? '' : v,
+                !isNested && (v === PASSTHROUGH_MODEL_VALUE || !v) ? '' : (v ?? ''),
             })
           }
           disabled={modelSelectDisabled}

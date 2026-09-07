@@ -36,7 +36,6 @@ import {
   MODELS_DEV_PRESET_ID,
   OFFICIAL_CHANNEL_ID,
 } from './constants'
-import { getUpstreamDisplayName } from './upstream-ratio-sync-helpers'
 
 type ChannelSelectorDialogProps = {
   open: boolean

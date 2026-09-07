@@ -103,7 +103,7 @@ export function ConversationDialog({
   }, [content, parsedJson])
 
   const isDark = resolvedTheme === 'dark'
-  const jsonTheme = isDark ? 'ocean' : 'rsuite'
+  const jsonTheme = isDark ? 'ocean' : 'rjv-default'
 
   return (
     <Dialog

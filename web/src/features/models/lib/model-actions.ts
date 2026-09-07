@@ -22,7 +22,6 @@ import { toast } from 'sonner'
 
 import {
   updateModelStatus,
-  deleteModel as deleteModelAPI,
   batchDisableModelsNoChannels,
   batchEnableModelsWithChannels,
 } from '../api'

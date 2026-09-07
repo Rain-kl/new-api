@@ -228,9 +228,7 @@ export function useModelsColumns(
         if (value.includes('disabled')) return status !== 1
         return false
       },
-      size: 110,
       minSize: 110,
-      enableSorting: false,
     },
     {
       id: 'connections',
