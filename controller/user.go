@@ -143,19 +143,9 @@ func recordLoginAudit(user *model.User, c *gin.Context) {
 	model.RecordLoginLog(user.Id, user.Role, user.Username, content, ip, "login", params, extra, c)
 }
 
-// setupLogin evaluates the shared login policy after primary authentication.
-// Only a completed Passkey ceremony may go directly to session issuance.
+// setupLogin creates a server-controlled login Session and returns the shared
+// authentication bundle used by every login method without requiring two-step verification.
 func setupLogin(user *model.User, c *gin.Context) {
-	challenge, err := service.StartLoginVerification(user, loginMethodFromContext(c))
-	if err != nil {
-		writeSecurityOperationError(c, err)
-		return
-	}
-	if challenge != nil {
-		setAuthNoStore(c)
-		common.ApiSuccess(c, challenge)
-		return
-	}
 	setupLoginAtAuthVersion(user, user.AuthVersion, c)
 }
 

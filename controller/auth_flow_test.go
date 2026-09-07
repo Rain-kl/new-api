@@ -297,29 +297,22 @@ func TestSecurityLoginSessionFailureRollsBackChallengeConsumption(t *testing.T) 
 	assert.EqualValues(t, 2, count)
 }
 
-func TestSecurityLoginFactorStateDoesNotAddPasswordLoginQueries(t *testing.T) {
+func TestSecurityLoginPermitsDirectPasswordLoginWithPasskeyConfigured(t *testing.T) {
 	user, _ := setupSecurityEnrollmentTest(t)
 	newSecurityLoginPasskey(t, user.Id)
 	previousPasswordLogin := common.PasswordLoginEnabled
 	common.PasswordLoginEnabled = true
 	t.Cleanup(func() { common.PasswordLoginEnabled = previousPasswordLogin })
-	queries := 0
-	require.NoError(t, model.DB.Callback().Query().After("gorm:query").Register("login_query_count", func(tx *gorm.DB) {
-		if !tx.DryRun {
-			queries++
-		}
-	}))
-	t.Cleanup(func() { _ = model.DB.Callback().Query().Remove("login_query_count") })
-	state, err := model.GetUserVerificationState(user.Id)
-	require.NoError(t, err)
-	assert.True(t, state.HasPassword)
-	assert.True(t, state.HasPasskey)
-	assert.False(t, state.HasTwoFA)
-	assert.Equal(t, 1, queries, "factor availability must be one database round trip")
-	queries = 0
 	response := securityEnrollmentRequest("POST", "/api/user/login", `{"username":"enrollment-user","password":"enrollment-password"}`, "", service.AuthIdentity{}, Login)
-	assert.Contains(t, response.Body.String(), `"require_verification":true`)
-	assert.Equal(t, 2, queries, "only the existing credential lookup and the replacement factor-state lookup run before the challenge")
+	var result struct {
+		Success bool `json:"success"`
+		Data    struct {
+			AccessToken string `json:"access_token"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+	require.True(t, result.Success, response.Body.String())
+	assert.NotEmpty(t, result.Data.AccessToken)
 }
 
 type boundLoginOAuthProvider struct {
@@ -333,7 +326,7 @@ func (provider *boundLoginOAuthProvider) FillUserByProviderID(user *model.User, 
 	return model.DB.First(user, provider.userID).Error
 }
 
-func TestSecurityLoginAllPrimaryTransportsRequireAdditionalVerification(t *testing.T) {
+func TestSecurityLoginPrimaryTransportsDoNotRequireTwoFactor(t *testing.T) {
 	for _, transport := range []string{"oauth", "custom oauth", "wechat", "telegram"} {
 		t.Run(transport, func(t *testing.T) {
 			var user *model.User
@@ -391,18 +384,16 @@ func TestSecurityLoginAllPrimaryTransportsRequireAdditionalVerification(t *testi
 				router.ServeHTTP(response, httptest.NewRequest("GET", "/api/oauth/"+slug+"?state="+token+"&code=provider-code", nil))
 			}
 			var result struct {
-				Success bool                   `json:"success"`
-				Data    service.LoginChallenge `json:"data"`
+				Success bool               `json:"success"`
+				Data    service.AuthBundle `json:"data"`
 			}
 			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 			require.True(t, result.Success, response.Body.String())
-			assert.True(t, result.Data.RequireVerification)
-			assert.Equal(t, []service.VerificationMethodOption{{Method: "passkey", Available: true}}, result.Data.Methods)
-			assert.NotEmpty(t, result.Data.FlowToken)
-			assert.Empty(t, response.Header().Values("Set-Cookie"))
+			assert.NotEmpty(t, result.Data.AccessToken)
+			assert.NotEmpty(t, response.Header().Values("Set-Cookie"))
 			count, err := model.CountActiveUserSessions(user.Id, time.Now().Unix())
 			require.NoError(t, err)
-			assert.EqualValues(t, 1, count)
+			assert.EqualValues(t, 2, count)
 		})
 	}
 }
@@ -549,22 +540,18 @@ func TestSecurityLoginRegisteredPasskeyRequiresUserVerification(t *testing.T) {
 	}
 }
 
-func TestSecurityLoginRequiresConfiguredFactors(t *testing.T) {
+func TestSecurityLoginPermitsLoginWithoutTwoFactorChallenge(t *testing.T) {
 	for _, test := range []struct {
 		name             string
 		twoFA, passkey   bool
 		locked, disabled bool
-		methods          []service.VerificationMethodOption
-		unavailable      bool
 	}{
 		{name: "password without additional factors"},
-		{name: "passkey requires verification", passkey: true, methods: []service.VerificationMethodOption{{Method: "passkey", Available: true}}},
-		{name: "twofa requires verification", twoFA: true, methods: []service.VerificationMethodOption{{Method: "2fa", Available: true}}},
-		{name: "both factors are alternatives", twoFA: true, passkey: true, methods: []service.VerificationMethodOption{{Method: "2fa", Available: true}, {Method: "passkey", Available: true}}},
-		{name: "locked twofa permits passkey", twoFA: true, passkey: true, locked: true, methods: []service.VerificationMethodOption{{Method: "2fa", Available: false, Reason: service.ErrVerificationLocked.Error()}, {Method: "passkey", Available: true}}},
-		{name: "disabled passkey permits twofa", twoFA: true, passkey: true, disabled: true, methods: []service.VerificationMethodOption{{Method: "2fa", Available: true}, {Method: "passkey", Available: false, Reason: "Passkey authentication is disabled."}}},
-		{name: "only passkey disabled blocks password", passkey: true, disabled: true, unavailable: true},
-		{name: "both factors unavailable block password", passkey: true, twoFA: true, disabled: true, locked: true, unavailable: true},
+		{name: "passkey configured permits direct login", passkey: true},
+		{name: "twofa configured permits direct login", twoFA: true},
+		{name: "both factors configured permits direct login", twoFA: true, passkey: true},
+		{name: "locked twofa permits direct login", twoFA: true, passkey: true, locked: true},
+		{name: "disabled passkey permits direct login", twoFA: true, passkey: true, disabled: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			user, _ := setupSecurityEnrollmentTest(t)
@@ -589,37 +576,16 @@ func TestSecurityLoginRequiresConfiguredFactors(t *testing.T) {
 			var result struct {
 				Success bool `json:"success"`
 				Data    struct {
-					RequireVerification bool                               `json:"require_verification"`
-					FlowToken           string                             `json:"flow_token"`
-					ExpiresAt           int64                              `json:"expires_at"`
-					AccessToken         string                             `json:"access_token"`
-					Methods             []service.VerificationMethodOption `json:"methods"`
+					AccessToken string `json:"access_token"`
 				} `json:"data"`
 			}
 			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 			after, err := model.CountActiveUserSessions(user.Id, time.Now().Unix())
 			require.NoError(t, err)
-			if test.unavailable {
-				assert.False(t, result.Success)
-				assert.Equal(t, before, after)
-				assert.Empty(t, response.Header().Values("Set-Cookie"))
-				return
-			}
 			require.True(t, result.Success, response.Body.String())
-			if len(test.methods) == 0 {
-				assert.False(t, result.Data.RequireVerification)
-				assert.NotEmpty(t, result.Data.AccessToken)
-				assert.Equal(t, before+1, after)
-				return
-			}
-			assert.True(t, result.Data.RequireVerification)
-			assert.NotEmpty(t, result.Data.FlowToken)
-			assert.Greater(t, result.Data.ExpiresAt, time.Now().Unix())
-			assert.LessOrEqual(t, result.Data.ExpiresAt, time.Now().Add(5*time.Minute).Unix())
-			assert.Equal(t, test.methods, result.Data.Methods)
-			assert.Empty(t, result.Data.AccessToken)
-			assert.Empty(t, response.Header().Values("Set-Cookie"))
-			assert.Equal(t, before, after, "a pending challenge must not create a session")
+			assert.NotEmpty(t, result.Data.AccessToken)
+			assert.NotEmpty(t, response.Header().Values("Set-Cookie"))
+			assert.Equal(t, before+1, after)
 		})
 	}
 }
