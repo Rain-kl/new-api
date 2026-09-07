@@ -34,7 +34,8 @@ func TestRecordErrorLog_SaveConversationRecord(t *testing.T) {
 	require.NoError(t, err)
 	c.Set(common.KeyBodyStorage, bodyStorage)
 
-	other := map[string]interface{}{"error_code": "invalid_parameter"}
+	other := NewLogOther()
+	other.SetPublic("error_code", "invalid_parameter")
 	RecordErrorLog(c, 1, 10, "test-model", "test-token", "invalid parameter error", 5, 2, false, "default", other)
 
 	// Fetch saved log entry

@@ -36,6 +36,7 @@ import {
   MODELS_DEV_PRESET_ID,
   OFFICIAL_CHANNEL_ID,
 } from './constants'
+import { getUpstreamDisplayName } from './upstream-ratio-sync-helpers'
 
 type ChannelSelectorDialogProps = {
   open: boolean
@@ -96,7 +97,6 @@ export function ChannelSelectorDialog({
     () => new Set(localSelectedIds),
     [localSelectedIds]
   )
-
   const sortedChannels = useMemo(() => {
     const searchLower = debouncedSearch.trim().toLowerCase()
     const filtered = searchLower
@@ -292,7 +292,7 @@ export function ChannelSelectorDialog({
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
-      title={t('Select Sync Channels')}
+      title={t('Select price sources')}
       description={t(
         'Choose channels to sync upstream ratio configurations from'
       )}

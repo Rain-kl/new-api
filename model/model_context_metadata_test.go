@@ -28,7 +28,7 @@ func setupModelMetadataTestDB(t *testing.T) *gorm.DB {
 		}
 	})
 	DB = db
-	require.NoError(t, db.AutoMigrate(&Model{}))
+	require.NoError(t, db.AutoMigrate(&Model{}, &Option{}))
 	return db
 }
 

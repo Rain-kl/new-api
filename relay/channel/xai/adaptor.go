@@ -11,6 +11,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 
 	"github.com/QuantumNous/new-api/relay/constant"
 
@@ -78,13 +79,13 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			request.MaxCompletionTokens = request.MaxTokens
 			request.MaxTokens = nil
 		}
-		// Channel rules may already own effort; still strip -high/-low from model name.
-		if strings.HasSuffix(request.Model, "-high") {
+		preserveSuffix := model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) || model_setting.ShouldPreserveThinkingSuffix(request.Model)
+		if !preserveSuffix && strings.HasSuffix(request.Model, "-high") {
 			if info == nil || !info.ReasoningEffortFromChannel {
 				request.ReasoningEffort = "high"
 			}
 			request.Model = strings.TrimSuffix(request.Model, "-high")
-		} else if strings.HasSuffix(request.Model, "-low") {
+		} else if !preserveSuffix && strings.HasSuffix(request.Model, "-low") {
 			if info == nil || !info.ReasoningEffortFromChannel {
 				request.ReasoningEffort = "low"
 			}

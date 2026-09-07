@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { type TFunction } from 'i18next'
+import type { TFunction } from 'i18next'
 
 import type { NameRule, ModelStatus, SyncSource } from './types'
 
@@ -202,12 +202,6 @@ export function getSyncSourceOptions(t: TFunction) {
       value: 'official' as SyncSource,
       description: t('Sync from the public upstream metadata repository.'),
       disabled: false,
-    },
-    {
-      label: t('Configuration File'),
-      value: 'config' as SyncSource,
-      description: t('Upload or reference a local configuration file.'),
-      disabled: true,
     },
   ] as const
 }

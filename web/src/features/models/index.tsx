@@ -39,6 +39,7 @@ import {
   ModelRedirectProvider,
   ModelRedirectSection,
 } from './components/model-redirect-section'
+import { VendorsTable } from './components/vendors-table'
 import { useModelDeploymentSettings } from './hooks/use-model-deployment-settings'
 import { deploymentsQueryKeys } from './lib'
 import {
@@ -49,23 +50,33 @@ import {
 
 const route = getRouteApi('/_authenticated/models/$section')
 
-const SECTION_META: Record<ModelsSectionId, { titleKey: string }> = {
+const SECTION_META: Record<
+  ModelsSectionId,
+  { titleKey: string; tabKey: string }
+> = {
   metadata: {
-    titleKey: 'Metadata',
+    titleKey: 'Model management',
+    tabKey: 'Models',
   },
   redirect: {
     // Hardcoded Chinese (no i18n) for personal feature UI
     titleKey: '模型重定向',
+    tabKey: '模型重定向',
+  },
+  vendors: {
+    titleKey: 'Vendor management',
+    tabKey: 'Vendors',
   },
   deployments: {
     titleKey: 'Deployments',
+    tabKey: 'Deployments',
   },
 }
 
 function ModelsContent() {
   const { t } = useTranslation()
-  const navigate = useNavigate()
-  const { tabCategory, setTabCategory } = useModels()
+  const navigate = useNavigate({ from: '/models/$section' })
+  const { tabCategory, setTabCategory, setOpen, setCurrentVendor } = useModels()
   const params = route.useParams()
   const activeSection = (params.section ??
     MODELS_DEFAULT_SECTION) as ModelsSectionId
@@ -85,6 +96,7 @@ function ModelsContent() {
       void navigate({
         to: '/models/$section',
         params: { section: section as ModelsSectionId },
+        search: (previous) => previous,
       })
     },
     [navigate]
@@ -92,24 +104,45 @@ function ModelsContent() {
 
   const meta = SECTION_META[activeSection] ?? SECTION_META.metadata
 
+  let actions = <ModelsPrimaryButtons />
+  let content = <ModelsTable />
+  if (activeSection === 'redirect') {
+    actions = <ModelRedirectPrimaryButtons />
+    content = <ModelRedirectSection />
+  } else if (activeSection === 'vendors') {
+    actions = (
+      <Button
+        size='sm'
+        onClick={() => {
+          setCurrentVendor(null)
+          setOpen('create-vendor')
+        }}
+      >
+        <Plus className='size-4' />
+        {t('Add Vendor')}
+      </Button>
+    )
+    content = <VendorsTable />
+  } else if (activeSection === 'deployments') {
+    actions = (
+      <Button onClick={() => setCreateDeploymentOpen(true)} size='sm'>
+        <Plus className='size-4' />
+        {t('Create deployment')}
+      </Button>
+    )
+    content = <DeploymentsSection />
+  }
+
   const page = (
     <>
-      <SectionPageLayout fixedContent>
+      <SectionPageLayout
+        fixedContent
+        stackActionsOnMobile={activeSection === 'metadata'}
+      >
         <SectionPageLayout.Title>
           {activeSection === 'redirect' ? meta.titleKey : t(meta.titleKey)}
         </SectionPageLayout.Title>
-        <SectionPageLayout.Actions>
-          {activeSection === 'metadata' ? (
-            <ModelsPrimaryButtons />
-          ) : activeSection === 'redirect' ? (
-            <ModelRedirectPrimaryButtons />
-          ) : activeSection === 'deployments' ? (
-            <Button onClick={() => setCreateDeploymentOpen(true)} size='sm'>
-              <Plus className='h-4 w-4' />
-              {t('Create deployment')}
-            </Button>
-          ) : null}
-        </SectionPageLayout.Actions>
+        <SectionPageLayout.Actions>{actions}</SectionPageLayout.Actions>
         <SectionPageLayout.Content>
           <div className='flex h-full min-h-0 flex-col gap-4'>
             <Tabs value={activeSection} onValueChange={handleSectionChange}>
@@ -117,21 +150,13 @@ function ModelsContent() {
                 {MODELS_SECTION_IDS.map((section) => (
                   <TabsTrigger key={section} value={section}>
                     {section === 'redirect'
-                      ? SECTION_META[section].titleKey
-                      : t(SECTION_META[section].titleKey)}
+                      ? SECTION_META[section].tabKey
+                      : t(SECTION_META[section].tabKey)}
                   </TabsTrigger>
                 ))}
               </TabsList>
             </Tabs>
-            <div className='min-h-0 flex-1'>
-              {activeSection === 'metadata' ? (
-                <ModelsTable />
-              ) : activeSection === 'redirect' ? (
-                <ModelRedirectSection />
-              ) : (
-                <DeploymentsSection />
-              )}
-            </div>
+            <div className='min-h-0 flex-1'>{content}</div>
           </div>
         </SectionPageLayout.Content>
       </SectionPageLayout>

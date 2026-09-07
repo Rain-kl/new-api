@@ -53,7 +53,7 @@ func tryModelRedirectSelection(
 		clientModel,
 		effectiveGroup,
 		requestPath,
-		channelSupportsRequestPath,
+		model.ChannelSupportsRequestPath,
 	)
 	// Skip hops temporarily disabled after recent failures (1m * fails, max 30m).
 	filtered = model.FilterRedirectCooldownDown(filtered, clientModel)

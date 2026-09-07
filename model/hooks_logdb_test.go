@@ -1,7 +1,6 @@
 package model
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -52,7 +51,8 @@ func TestMigrateRegisteredLOGDBModels_ConversationRecord(t *testing.T) {
 	}
 }
 
-// Manual DDL with DEFAULT ” trips glebarez/GORM 1.25 field lookup; empty table should be recreated.
+// Manual DDL with DEFAULT " was once broken in glebarez/sqlite <v1.11; empty table should be
+// handled (either recovered or migrated directly). As of v1.11 AutoMigrate succeeds directly.
 func TestMigrateRegisteredLOGDBModels_RecoversBrokenEmptySQLiteDDL(t *testing.T) {
 	db := openPersonalLOGTestDB(t)
 	withTestLOGDB(t, db)
@@ -68,15 +68,8 @@ func TestMigrateRegisteredLOGDBModels_RecoversBrokenEmptySQLiteDDL(t *testing.T)
 		t.Fatalf("seed broken DDL: %v", err)
 	}
 
-	// Direct AutoMigrate still fails on this DDL (documents the driver bug).
-	if err := db.AutoMigrate(&ConversationRecord{}); err == nil {
-		t.Fatal("expected direct AutoMigrate to fail on DEFAULT '' manual DDL")
-	} else if !strings.Contains(err.Error(), "look up field") {
-		t.Fatalf("unexpected AutoMigrate error: %v", err)
-	}
-
 	if err := migrateRegisteredLOGDBModels(); err != nil {
-		t.Fatalf("migrateRegisteredLOGDBModels should recover empty broken table: %v", err)
+		t.Fatalf("migrateRegisteredLOGDBModels should handle the table: %v", err)
 	}
 	if !db.Migrator().HasTable(&ConversationRecord{}) {
 		t.Fatal("expected table after recovery")

@@ -1,16 +1,16 @@
 package oairesponses
 
 import (
+	"context"
 	"fmt"
 	"strings"
-
-	"context"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	relaymedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/media"
 	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 )
 
 func convertOpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Meta, request any) (any, error) {
@@ -44,43 +44,14 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 	AttachCodexToolBridge(info, toolCtx)
 
 	claudeRequest := &dto.ClaudeRequest{
-		Model:  req.Model,
-		Stream: req.Stream,
-	}
-	// Thinking and sampling interact: when thinking is enabled, Anthropic rejects
-	// temperature/top_p. Only forward sampling knobs when thinking stays off.
-	thinkingEnabled := applyResponsesReasoningToClaude(req, claudeRequest)
-	if !thinkingEnabled {
-		claudeRequest.Temperature = req.Temperature
-		claudeRequest.TopP = req.TopP
+		Model:       req.Model,
+		Stream:      req.Stream,
+		Temperature: req.Temperature,
+		TopP:        req.TopP,
 	}
 
 	if req.MaxOutputTokens != nil && *req.MaxOutputTokens > 0 {
 		claudeRequest.MaxTokens = kitutil.GetPointer(*req.MaxOutputTokens)
-	}
-	if claudeRequest.MaxTokens == nil || *claudeRequest.MaxTokens == 0 {
-		if defaultMaxTokens, configured := convmeta.OptionsOf(info).Claude.DefaultMaxTokensFor(req.Model); configured {
-			value := uint(defaultMaxTokens)
-			claudeRequest.MaxTokens = &value
-		}
-	}
-	if thinkingEnabled && claudeRequest.Thinking != nil && claudeRequest.MaxTokens != nil {
-		// Anthropic requires max_tokens > budget_tokens. Cap budget at half of
-		// max_tokens (cc-switch) so a large derived budget cannot consume the
-		// entire output ceiling.
-		budget := claudeRequest.Thinking.GetBudgetTokens()
-		ceiling := int(*claudeRequest.MaxTokens) / 2
-		if ceiling > 0 && budget > ceiling {
-			budget = ceiling
-		}
-		if budget < 1024 {
-			claudeRequest.Thinking = nil
-			thinkingEnabled = false
-			claudeRequest.Temperature = req.Temperature
-			claudeRequest.TopP = req.TopP
-		} else {
-			claudeRequest.Thinking.BudgetTokens = kitutil.GetPointer(budget)
-		}
 	}
 
 	claudeTools := codexChatToolsToClaudeTools(toolCtx.chatTools())
@@ -99,14 +70,26 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 		if toolChoice != nil || RawJSONPresent(req.ParallelToolCalls) {
 			mappedChoice := sharedclaude.MapOpenAIToolChoice(toolChoice, ParallelToolCalls(req.ParallelToolCalls))
 			claudeRequest.ToolChoice = mappedChoice
-			// Forced tool_choice is incompatible with extended thinking.
-			if thinkingEnabled && claudeToolChoiceIsForced(mappedChoice) {
-				claudeRequest.Thinking = nil
-				thinkingEnabled = false
-				claudeRequest.Temperature = req.Temperature
-				claudeRequest.TopP = req.TopP
-			}
 		}
+	}
+
+	sourceReasoning, err := reasoning.FromOpenAIResponses(req)
+	if err != nil {
+		return nil, reasoning.AsClientError(err)
+	}
+	if err := sharedclaude.ApplyReasoning(c, claudeRequest, info, sourceReasoning, true); err != nil {
+		return nil, reasoning.AsClientError(err)
+	}
+	if claudeRequest.MaxTokens == nil {
+		if defaultMaxTokens, configured := convmeta.OptionsOf(info).Claude.DefaultMaxTokensFor(claudeRequest.Model); configured {
+			value := uint(defaultMaxTokens)
+			claudeRequest.MaxTokens = &value
+		}
+	}
+	if claudeRequest.Thinking != nil && claudeToolChoiceIsForced(claudeRequest.ToolChoice) {
+		claudeRequest.Thinking = nil
+		claudeRequest.Temperature = req.Temperature
+		claudeRequest.TopP = req.TopP
 	}
 
 	systemMessages := make([]dto.ClaudeMediaMessage, 0)
@@ -152,15 +135,6 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 				Content:   responsesToolOutputValue(item),
 			})
 		default:
-			role := responsesClaudeRole(item)
-			if role == "system" {
-				parts, err := responsesInputContentToClaudeMediaMessages(c, item["content"])
-				if err != nil {
-					return nil, err
-				}
-				systemMessages = append(systemMessages, parts...)
-				continue
-			}
 			// Skip non-message typed items (reasoning, etc.) that are not chat turns.
 			if itemType != "" && itemType != "message" {
 				// Restore Anthropic signed thinking blocks from Responses reasoning
@@ -172,9 +146,22 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 				}
 				continue
 			}
+			sourceRole := strings.TrimSpace(kitutil.Interface2String(item["role"]))
+			role := responsesClaudeRole(sourceRole)
 			parts, err := responsesInputContentToClaudeMediaMessages(c, item["content"])
 			if err != nil {
 				return nil, err
+			}
+			if sourceRole == "" && len(parts) == 0 {
+				continue
+			}
+			if role == "system" {
+				for _, part := range parts {
+					if part.Type == "text" {
+						systemMessages = append(systemMessages, part)
+					}
+				}
+				continue
 			}
 			if len(parts) == 0 {
 				parts = []dto.ClaudeMediaMessage{
@@ -194,7 +181,9 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 	if len(systemMessages) > 0 {
 		claudeRequest.System = systemMessages
 	}
-	claudeRequest.Messages = ensureClaudeMessagesStartWithUser(claudeRequest.Messages)
+	if len(claudeRequest.Messages) > 0 || len(systemMessages) > 0 {
+		claudeRequest.Messages = ensureClaudeMessagesStartWithUser(claudeRequest.Messages)
+	}
 	// Checked last so every injection path has had its chance to satisfy the
 	// required field.
 	if claudeRequest.MaxTokens == nil {
@@ -219,77 +208,27 @@ func codexChatToolsToClaudeTools(tools []dto.ToolCallRequest) []any {
 		out = append(out, &dto.Tool{
 			Name:        name,
 			Description: tool.Function.Description,
-			InputSchema: responsesFunctionParametersToClaudeInputSchema(tool.Function.Parameters),
+			InputSchema: sharedclaude.FunctionParametersToInputSchema(tool.Function.Parameters),
 		})
 	}
 	return out
 }
 
-func responsesFunctionParametersToClaudeInputSchema(parameters any) map[string]interface{} {
-	normalized := normalizeFunctionParameters(parameters)
-	if params, ok := normalized.(map[string]any); ok {
-		schema := make(map[string]interface{}, len(params))
-		for key, value := range params {
-			schema[key] = value
-		}
-		if schema["type"] == nil {
-			schema["type"] = "object"
-		}
-		if schema["properties"] == nil {
-			schema["properties"] = map[string]interface{}{}
-		}
-		return schema
-	}
-	return map[string]interface{}{
-		"type":       "object",
-		"properties": map[string]interface{}{},
-	}
-}
-
-// applyResponsesReasoningToClaude maps Responses reasoning.effort onto Claude
-// thinking. Returns whether thinking is enabled. Budgets follow cc-switch
-// transform_codex_anthropic effort_to_thinking_budget.
-func applyResponsesReasoningToClaude(req *dto.OpenAIResponsesRequest, claudeRequest *dto.ClaudeRequest) bool {
-	effort := strings.ToLower(strings.TrimSpace(ReasoningEffort(req)))
-	switch effort {
-	case "", "none", "off", "disabled":
-		return false
-	case "minimal", "low":
-		claudeRequest.Thinking = &dto.Thinking{
-			Type:         "enabled",
-			BudgetTokens: kitutil.GetPointer(2048),
-		}
-		return true
-	case "medium":
-		claudeRequest.Thinking = &dto.Thinking{
-			Type:         "enabled",
-			BudgetTokens: kitutil.GetPointer(8192),
-		}
-		return true
-	case "high":
-		claudeRequest.Thinking = &dto.Thinking{
-			Type:         "enabled",
-			BudgetTokens: kitutil.GetPointer(16384),
-		}
-		return true
-	case "xhigh", "max":
-		claudeRequest.Thinking = &dto.Thinking{
-			Type:         "enabled",
-			BudgetTokens: kitutil.GetPointer(24576),
-		}
-		return true
-	default:
-		return false
-	}
-}
-
-func claudeToolChoiceIsForced(choice *dto.ClaudeToolChoice) bool {
+func claudeToolChoiceIsForced(choice any) bool {
 	if choice == nil {
 		return false
 	}
-	switch choice.Type {
-	case "any", "tool":
-		return true
+	switch c := choice.(type) {
+	case *dto.ClaudeToolChoice:
+		if c == nil {
+			return false
+		}
+		return c.Type == "any" || c.Type == "tool"
+	case dto.ClaudeToolChoice:
+		return c.Type == "any" || c.Type == "tool"
+	case map[string]any:
+		t, _ := c["type"].(string)
+		return t == "any" || t == "tool"
 	default:
 		return false
 	}
@@ -304,7 +243,6 @@ func isIncompleteResponsesToolCall(item map[string]any) bool {
 		return false
 	}
 }
-
 func responsesInputContentToClaudeMediaMessages(c context.Context, content any) ([]dto.ClaudeMediaMessage, error) {
 	contentParts, err := ContentParts(content)
 	if err != nil {
@@ -485,8 +423,8 @@ func claudeMessageContentParts(content any) []dto.ClaudeMediaMessage {
 	}
 }
 
-func responsesClaudeRole(item map[string]any) string {
-	switch strings.TrimSpace(kitutil.Interface2String(item["role"])) {
+func responsesClaudeRole(role string) string {
+	switch role {
 	case "assistant":
 		return "assistant"
 	case "system", "developer":
@@ -497,7 +435,7 @@ func responsesClaudeRole(item map[string]any) string {
 }
 
 func ensureClaudeMessagesStartWithUser(messages []dto.ClaudeMessage) []dto.ClaudeMessage {
-	if len(messages) == 0 || messages[0].Role == "user" {
+	if len(messages) > 0 && messages[0].Role == "user" {
 		return messages
 	}
 	return append([]dto.ClaudeMessage{

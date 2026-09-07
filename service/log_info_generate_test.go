@@ -26,5 +26,5 @@ func TestGenerateTextOtherInfoIncludesChannelRatio(t *testing.T) {
 	}
 
 	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 2, 1, 0, 0, 0, 0)
-	require.Equal(t, 0.5, other["channel_ratio"])
+	require.Equal(t, 0.5, other.Snapshot()["channel_ratio"])
 }

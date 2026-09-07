@@ -42,7 +42,6 @@ func TestChatCompletionsResponseToResponsesPreservesTextToolCallsAndUsage(t *tes
 	assert.Equal(t, "lookup", resp.Output[1].Name)
 	assert.Equal(t, `"{\"q\":\"x\"}"`, string(resp.Output[1].Arguments))
 }
-
 func TestChatCompletionsResponseToResponsesRestoresCodexToolShapes(t *testing.T) {
 	bridge := &convmeta.CodexToolBridge{}
 	bridge.Set("apply_patch", convmeta.CodexToolSpec{Kind: convmeta.CodexToolKindCustom, Name: "apply_patch"})
@@ -138,6 +137,28 @@ func TestChatCompletionsStreamToResponsesRestoresCustomToolInputEvents(t *testin
 	assert.True(t, sawInputDelta)
 	assert.True(t, sawInputDone)
 }
+
+func TestChatCompletionsResponseToResponsesEmitsReasoningSummaryBeforeText(t *testing.T) {
+	message := dto.Message{Role: "assistant", Content: "final answer"}
+	message.ReasoningContent = lo.ToPtr("thinking summary")
+	resp, _, err := ChatCompletionsResponseToResponsesResponse(&dto.OpenAITextResponse{
+		Id:    "chatcmpl_1",
+		Model: "gpt-test",
+		Choices: []dto.OpenAITextResponseChoice{
+			{Message: message, FinishReason: "stop"},
+		},
+	}, "resp_1")
+	require.NoError(t, err)
+
+	require.Len(t, resp.Output, 2)
+	assert.Equal(t, responsesOutputTypeReasoning, resp.Output[0].Type)
+	require.Len(t, resp.Output[0].Summary, 1)
+	assert.Equal(t, "thinking summary", resp.Output[0].Summary[0].Text)
+	assert.Empty(t, resp.Output[0].Content)
+	assert.Equal(t, responsesOutputTypeMessage, resp.Output[1].Type)
+	assert.Equal(t, "final answer", resp.Output[1].Content[0].Text)
+}
+
 
 func TestChatCompletionsResponseToResponsesMapsIncompleteFinishReasons(t *testing.T) {
 	tests := []struct {

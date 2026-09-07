@@ -665,14 +665,14 @@ func TestGetRandomSatisfiedChannel_PlaygroundPathNeedsNormalization(t *testing.T
 
 	// The distributor normalizes the playground path to /v1/... before selection,
 	// so the Advanced Custom route matches and the channel is selected.
-	got, err := GetRandomSatisfiedChannel("default", "deepseek-flash", 0, "/v1/chat/completions")
+	got, err := GetRandomSatisfiedChannel("default", "deepseek-flash", 0, requestPathFilters("/v1/chat/completions"))
 	require.NoError(t, err)
 	require.NotNil(t, got, "normalized /v1 path must match the Advanced Custom route")
 	require.Equal(t, 9201, got.Id)
 
 	// The raw playground path does NOT match the exact route — this is exactly why
 	// Distribute normalizes the selection path.
-	raw, err := GetRandomSatisfiedChannel("default", "deepseek-flash", 0, "/pg/chat/completions")
+	raw, err := GetRandomSatisfiedChannel("default", "deepseek-flash", 0, requestPathFilters("/pg/chat/completions"))
 	require.NoError(t, err)
 	require.Nil(t, raw, "raw /pg path must not match; the distributor normalizes before selection")
 }

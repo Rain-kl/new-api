@@ -10,10 +10,12 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	hostreasoning "github.com/QuantumNous/new-api/setting/reasoning"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -86,12 +88,12 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	// configured and the selected channel's model_mapping points it at a target
 	// that does — then the mapped target's fee is used so a mapping-only channel
 	// bills instead of erroring with "price not configured".
-	billingModel := resolveBillingModel(c, info)
-	modelPrice, usePrice := ratio_setting.GetModelPrice(billingModel, false)
+	billingModelName := resolveBillingModel(c, info)
+	modelPrice, usePrice := ratio_setting.GetModelPrice(billingModelName, false)
 
 	// Check if this model uses tiered_expr billing
-	if billing_setting.GetBillingMode(billingModel) == billing_setting.BillingModeTieredExpr {
-		return modelPriceHelperTiered(c, info, billingModel, promptTokens, meta, groupRatioInfo)
+	if billing_setting.GetBillingMode(billingModelName) == billing_setting.BillingModeTieredExpr {
+		return modelPriceHelperTiered(c, info, billingModelName, promptTokens, meta, groupRatioInfo)
 	}
 
 	var preConsumedQuota int
@@ -112,7 +114,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		}
 		var success bool
 		var matchName string
-		modelRatio, success, matchName = ratio_setting.GetModelRatio(billingModel)
+		modelRatio, success, matchName = ratio_setting.GetModelRatio(billingModelName)
 		if !success {
 			acceptUnsetRatio := false
 			if info.UserSetting.AcceptUnsetRatioModel {
@@ -122,15 +124,15 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 				return hosttypes.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
 			}
 		}
-		completionRatio = ratio_setting.GetCompletionRatio(billingModel)
-		cacheRatio, _ = ratio_setting.GetCacheRatio(billingModel)
-		cacheCreationRatio, _ = ratio_setting.GetCreateCacheRatio(billingModel)
+		completionRatio = ratio_setting.GetCompletionRatio(billingModelName)
+		cacheRatio, _ = ratio_setting.GetCacheRatio(billingModelName)
+		cacheCreationRatio, _ = ratio_setting.GetCreateCacheRatio(billingModelName)
 		cacheCreationRatio5m = cacheCreationRatio
 		// 固定1h和5min缓存写入价格的比例
 		cacheCreationRatio1h = cacheCreationRatio * claudeCacheCreation1hMultiplier
-		imageRatio, _ = ratio_setting.GetImageRatio(billingModel)
-		audioRatio = ratio_setting.GetAudioRatio(billingModel)
-		audioCompletionRatio = ratio_setting.GetAudioCompletionRatio(billingModel)
+		imageRatio, _ = ratio_setting.GetImageRatio(billingModelName)
+		audioRatio = ratio_setting.GetAudioRatio(billingModelName)
+		audioCompletionRatio = ratio_setting.GetAudioCompletionRatio(billingModelName)
 		ratio := modelRatio * groupRatioInfo.GroupRatio * groupRatioInfo.ChannelRatio
 		quota, err := common.QuotaFromFloatStrict(float64(preConsumedTokens) * ratio)
 		if err != nil {
@@ -269,18 +271,56 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 	return priceData, nil
 }
 
+// HasPriceOrRatioEntry reports whether name has a configured price, ratio, or
+// tiered billing-mode entry after a single wildcard normalization. Self-use
+// fallback does not count as a configured ratio.
+func HasPriceOrRatioEntry(name string) bool {
+	formatted := ratio_setting.FormatMatchingModelName(name)
+	if _, ok := ratio_setting.GetModelPrice(formatted, false); ok {
+		return true
+	}
+	if ratio_setting.HasConfiguredModelRatio(formatted) {
+		return true
+	}
+	if billing_setting.GetBillingMode(formatted) == billing_setting.BillingModeTieredExpr {
+		expr, ok := billing_setting.GetBillingExpr(formatted)
+		return ok && strings.TrimSpace(expr) != ""
+	}
+	return false
+}
+
 func HasModelBillingConfig(modelName string) bool {
-	if _, ok := ratio_setting.GetModelPrice(modelName, false); ok {
-		return true
+	return HasPriceOrRatioEntry(modelName)
+}
+
+func resolveBillingModelName(origin string) string {
+	var candidates []string
+	if !reasoning.ParseModelModifiers(origin).HasModifiers() {
+		candidates = append(candidates, origin)
 	}
-	if _, ok, _ := ratio_setting.GetModelRatio(modelName); ok {
-		return true
+	candidates = append(candidates, hostreasoning.CanonicalBillingModelNames(origin)...)
+	base := hostreasoning.BaseModelName(origin)
+	candidates = append(candidates, base)
+
+	seen := make(map[string]struct{}, len(candidates))
+	matched := ""
+	for _, name := range candidates {
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		if HasPriceOrRatioEntry(name) {
+			matched = name
+			break
+		}
 	}
-	if billing_setting.GetBillingMode(modelName) != billing_setting.BillingModeTieredExpr {
-		return false
+	if matched == "" {
+		matched = base
 	}
-	expr, ok := billing_setting.GetBillingExpr(modelName)
-	return ok && strings.TrimSpace(expr) != ""
+	return matched
 }
 
 // resolveBillingModel returns the model whose fee configuration should be used
@@ -290,13 +330,34 @@ func HasModelBillingConfig(modelName string) bool {
 // that does have a fee — then the mapped target's fee is used so a mapping-only
 // channel bills instead of erroring with "price not configured".
 func resolveBillingModel(c *gin.Context, info *relaycommon.RelayInfo) string {
-	originModel := info.OriginModelName
-	if HasModelBillingConfig(originModel) || info.UserSetting.AcceptUnsetRatioModel {
-		return originModel
+	if info != nil {
+		if matched := resolveBillingModelName(info.GetOriginModelName()); matched != "" && matched != info.OriginModelName {
+			info.BillingModelName = matched
+		}
+	}
+	billingModelName := ""
+	if info != nil {
+		billingModelName = info.GetBillingModelName()
+	}
+	if HasPriceOrRatioEntry(billingModelName) || (info != nil && info.UserSetting.AcceptUnsetRatioModel) {
+		return billingModelName
+	}
+	originModel := ""
+	if info != nil {
+		originModel = info.OriginModelName
 	}
 	mapped, ok := channelMappedModel(c, originModel)
-	if !ok || !HasModelBillingConfig(mapped) {
-		return originModel
+	if !ok {
+		return billingModelName
+	}
+	if matchedMapped := resolveBillingModelName(mapped); matchedMapped != "" {
+		mapped = matchedMapped
+	}
+	if !HasPriceOrRatioEntry(mapped) {
+		return billingModelName
+	}
+	if info != nil {
+		info.BillingModelName = mapped
 	}
 	return mapped
 }
@@ -305,6 +366,9 @@ func resolveBillingModel(c *gin.Context, info *relaycommon.RelayInfo) string {
 // cycle detection) from start and returns the terminal mapped model. ok=false
 // when there is no mapping, start is not mapped, or the chain contains a cycle.
 func channelMappedModel(c *gin.Context, start string) (string, bool) {
+	if c == nil {
+		return "", false
+	}
 	modelMapping := c.GetString("model_mapping")
 	if modelMapping == "" || modelMapping == "{}" {
 		return "", false
@@ -338,10 +402,10 @@ func channelMappedModel(c *gin.Context, start string) (string, bool) {
 	return current, true
 }
 
-func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, billingModel string, promptTokens int, meta *types.TokenCountMeta, groupRatioInfo hosttypes.GroupRatioInfo) (hosttypes.PriceData, error) {
-	exprStr, ok := billing_setting.GetBillingExpr(billingModel)
+func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, billingModelName string, promptTokens int, meta *types.TokenCountMeta, groupRatioInfo hosttypes.GroupRatioInfo) (hosttypes.PriceData, error) {
+	exprStr, ok := billing_setting.GetBillingExpr(billingModelName)
 	if !ok {
-		return hosttypes.PriceData{}, fmt.Errorf("model %s is configured as tiered_expr but has no billing expression", billingModel)
+		return hosttypes.PriceData{}, fmt.Errorf("model %s is configured as tiered_expr but has no billing expression", billingModelName)
 	}
 
 	estimatedCompletionTokens := meta.MaxTokens
@@ -360,7 +424,7 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, billing
 		Len: float64(promptTokens),
 	}, requestInput)
 	if err != nil {
-		return hosttypes.PriceData{}, fmt.Errorf("model %s tiered expr run failed: %w", billingModel, err)
+		return hosttypes.PriceData{}, fmt.Errorf("model %s tiered expr run failed: %w", billingModelName, err)
 	}
 
 	// Expression coefficients are $/1M tokens prices; convert to quota the same way per-call billing does.
@@ -381,7 +445,7 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, billing
 	exprHash := billingexpr.ExprHashString(exprStr)
 	snapshot := &billingexpr.BillingSnapshot{
 		BillingMode:               billing_setting.BillingModeTieredExpr,
-		ModelName:                 billingModel,
+		ModelName:                 billingModelName,
 		ExprString:                exprStr,
 		ExprHash:                  exprHash,
 		GroupRatio:                groupRatioInfo.GroupRatio,
@@ -403,8 +467,9 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, billing
 		QuotaToPreConsume: preConsumedQuota,
 	}
 
-	logger.LogDebug(c, "model_price_helper_tiered result: model=%s preConsume=%d quotaBeforeGroup=%.2f groupRatio=%.2f tier=%s", billingModel, preConsumedQuota, quotaBeforeGroup, groupRatioInfo.GroupRatio, trace.MatchedTier)
+	logger.LogDebug(c, "model_price_helper_tiered result: model=%s preConsume=%d quotaBeforeGroup=%.2f groupRatio=%.2f tier=%s", billingModelName, preConsumedQuota, quotaBeforeGroup, groupRatioInfo.GroupRatio, trace.MatchedTier)
 
 	info.PriceData = priceData
 	return priceData, nil
 }
+

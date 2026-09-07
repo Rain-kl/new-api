@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 )
 
 // ModelRedirect is a virtual model name with an ordered channel+model fallback chain.
@@ -549,7 +550,7 @@ func FirstUsableRedirectCandidate(cands []RedirectCandidate, clientModel, group,
 		}
 		if cand.IsModelOnly() {
 			for level := 0; level < modelSlots; level++ {
-				ch, _ := GetRandomSatisfiedChannel(group, cand.Model, level, requestPath)
+				ch, _ := GetRandomSatisfiedChannel(group, cand.Model, level, requestPathFilters(requestPath))
 				if ch == nil {
 					break
 				}
@@ -636,13 +637,25 @@ func resolveRedirectSlotAt(cands []RedirectCandidate, slot int, clientModel, gro
 		return ch, AttemptModel(clientModel, cand)
 	}
 	if cand.IsModelOnly() {
-		ch, _ := GetRandomSatisfiedChannel(group, cand.Model, level, requestPath)
+		ch, _ := GetRandomSatisfiedChannel(group, cand.Model, level, requestPathFilters(requestPath))
 		if ch == nil {
 			return nil, ""
 		}
 		return ch, cand.Model
 	}
 	return nil, ""
+}
+
+func requestPathFilters(requestPath string) []dto.ChannelFilter {
+	if requestPath == "" {
+		return nil
+	}
+	return []dto.ChannelFilter{
+		{
+			Kind:        dto.FilterRequestPath,
+			RequestPath: requestPath,
+		},
+	}
 }
 
 // ----- CRUD -----
