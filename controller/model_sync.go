@@ -95,7 +95,7 @@ func newHTTPClient() *http.Client {
 		ResponseHeaderTimeout: time.Duration(timeoutSec) * time.Second,
 	}
 	if common.TLSInsecureSkipVerify {
-		transport.TLSClientConfig = common.InsecureTLSConfig
+		transport.TLSClientConfig = common.InsecureTLSConfig.Clone()
 	}
 	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, _, err := net.SplitHostPort(addr)
@@ -127,10 +127,7 @@ func getHTTPClient() *http.Client {
 
 func fetchJSON[T any](ctx context.Context, url string, out *upstreamEnvelope[T]) error {
 	var lastErr error
-	attempts := common.GetEnvOrDefault("SYNC_HTTP_RETRY", 3)
-	if attempts < 1 {
-		attempts = 1
-	}
+	attempts := max(common.GetEnvOrDefault("SYNC_HTTP_RETRY", 3), 1)
 	baseDelay := 200 * time.Millisecond
 	maxMB := common.GetEnvOrDefault("SYNC_HTTP_MAX_MB", 10)
 	maxBytes := int64(maxMB) << 20

@@ -3,6 +3,7 @@ package middleware
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -55,7 +56,16 @@ func abortWithRelayMessage(c *gin.Context, statusCode int, message string, code 
 		})
 	}
 	c.Abort()
-	logger.LogError(c.Request.Context(), fmt.Sprintf("user %d | %s", userId, message))
+	logger.LogError(c.Request.Context(), common.LogText("user %d | %s", userId, message))
+}
+
+// invalidRequestStatus is the status of a request whose body could not be
+// read or parsed: 413 when the body exceeds MAX_REQUEST_BODY_MB, else 400.
+func invalidRequestStatus(err error) int {
+	if common.IsRequestBodyTooLargeError(err) {
+		return http.StatusRequestEntityTooLarge
+	}
+	return http.StatusBadRequest
 }
 
 func abortWithMidjourneyMessage(c *gin.Context, statusCode int, code int, description string) {

@@ -47,6 +47,8 @@ test:
 		GOWORK=off go test $$root_packages
 	@echo "Testing relaykit Go module..."
 	@cd relaykit && GOWORK=off go test ./...
+	@echo "Testing tokenkit Go module..."
+	@cd tokenkit && GOWORK=off go test ./...
 
 # Merge the current local branch into canary, push canary, then restore it.
 # Dirty worktrees are auto-stashed and restored after the operation.

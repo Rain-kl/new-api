@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -18,14 +19,14 @@ type emailBindRequest struct {
 }
 
 func EmailBindStart(c *gin.Context) {
-	identity, ok := middleware.GetSessionAuthIdentity(c)
+	identity, ok := middleware.GetStepUpIdentity(c)
 	if !ok {
 		writeSecurityOperationError(c, service.ErrAuthTokenInvalid)
 		return
 	}
 	succeeded, notificationFailed := false, false
 	defer func() {
-		recordUserSecurityAudit(c, identity.UserID, "user.binding_start", map[string]interface{}{"provider": "email", "success": succeeded, "notification_failed": notificationFailed})
+		recordUserSecurityAudit(c, identity.UserID, "user.binding_start", map[string]any{"provider": "email", "success": succeeded, "notification_failed": notificationFailed})
 	}()
 	var request emailBindRequest
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
@@ -46,7 +47,7 @@ func EmailBindStart(c *gin.Context) {
 	if authorization == nil {
 		return
 	}
-	data, err := service.StartEmailBinding(identity, authorization, email)
+	data, err := service.StartEmailBinding(identity, authorization, email, service.AccountMailLanguage(c, identity.UserID))
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -56,21 +57,21 @@ func EmailBindStart(c *gin.Context) {
 }
 
 func EmailBindResend(c *gin.Context) {
-	identity, ok := middleware.GetSessionAuthIdentity(c)
+	identity, ok := middleware.GetStepUpIdentity(c)
 	if !ok {
 		writeSecurityOperationError(c, service.ErrAuthTokenInvalid)
 		return
 	}
 	succeeded := false
 	defer func() {
-		recordUserSecurityAudit(c, identity.UserID, "user.email_binding_resend", map[string]interface{}{"success": succeeded})
+		recordUserSecurityAudit(c, identity.UserID, "user.email_binding_resend", map[string]any{"success": succeeded})
 	}()
 	var request emailBindRequest
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil || request.FlowToken == "" {
 		writeSecurityOperationError(c, model.ErrAuthFlowInvalid)
 		return
 	}
-	data, err := service.ResendAccountEmailBinding(identity, request.FlowToken)
+	data, err := service.ResendAccountEmailBinding(identity, request.FlowToken, service.AccountMailLanguage(c, identity.UserID))
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -80,14 +81,14 @@ func EmailBindResend(c *gin.Context) {
 }
 
 func EmailBind(c *gin.Context) {
-	identity, ok := middleware.GetSessionAuthIdentity(c)
+	identity, ok := middleware.GetStepUpIdentity(c)
 	if !ok {
 		writeSecurityOperationError(c, service.ErrAuthTokenInvalid)
 		return
 	}
 	succeeded, notificationFailed := false, false
 	defer func() {
-		recordUserSecurityAudit(c, identity.UserID, "user.binding_bind", map[string]interface{}{"provider": "email", "success": succeeded, "notification_failed": notificationFailed})
+		recordUserSecurityAudit(c, identity.UserID, "user.binding_bind", map[string]any{"provider": "email", "success": succeeded, "notification_failed": notificationFailed})
 	}()
 	var request emailBindRequest
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil || request.FlowToken == "" {
@@ -100,8 +101,9 @@ func EmailBind(c *gin.Context) {
 		return
 	}
 	succeeded = true
-	notificationFailed = service.NotifyAccountSecurityChange(state.CurrentEmail, "Email address changed") != nil
-	if err := service.NotifyAccountSecurityChange(state.Email, "Email address confirmed"); err != nil {
+	lang := service.AccountMailLanguage(c, identity.UserID)
+	notificationFailed = service.NotifyAccountSecurityChange(lang, state.CurrentEmail, i18n.MsgSecurityEventEmailChanged) != nil
+	if err := service.NotifyAccountSecurityChange(lang, state.Email, i18n.MsgSecurityEventEmailConfirmed); err != nil {
 		notificationFailed = true
 	}
 	if err := model.PublishUserAuthCache(identity.UserID); err != nil {

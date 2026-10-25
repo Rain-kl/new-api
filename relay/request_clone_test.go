@@ -92,13 +92,13 @@ func populateResponsesCloneFixture(t *testing.T, value reflect.Value, raw json.R
 		for i := 0; i < value.NumField(); i++ {
 			populateResponsesCloneFixture(t, value.Field(i), raw)
 		}
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if value.IsNil() {
 			value.Set(reflect.New(value.Type().Elem()))
 		}
 		populateResponsesCloneFixture(t, value.Elem(), raw)
 	case reflect.Slice:
-		require.Equal(t, reflect.TypeOf(json.RawMessage{}), value.Type())
+		require.Equal(t, reflect.TypeFor[json.RawMessage](), value.Type())
 		if value.Len() > 0 {
 			value.Index(0).SetUint('!')
 		}
@@ -194,7 +194,7 @@ func TestRequestDeepCopyOtherProtocols(t *testing.T) {
 			"metadata":{"user_id":"test"},"messages":[{"role":"user","content":"hello"}]
 		}`, func(clone *dto.ClaudeRequest) {
 			clone.Metadata[0] = '!'
-			clone.Tools.([]any)[0].(map[string]any)["input_schema"].(map[string]any)["type"] = "array"
+			clone.Tools.(json.RawMessage)[0] = '!'
 			clone.Messages[0].Content = "changed"
 			*clone.Temperature = 1
 		})

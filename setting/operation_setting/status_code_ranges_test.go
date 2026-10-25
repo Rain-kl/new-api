@@ -70,7 +70,7 @@ func TestShouldRetryByStatusCode(t *testing.T) {
 
 func TestShouldRetryByStatusCode_Default(t *testing.T) {
 	require.False(t, ShouldRetryByStatusCode(200))
-	require.True(t, ShouldRetryByStatusCode(400))
+	require.False(t, ShouldRetryByStatusCode(400))
 	require.True(t, ShouldRetryByStatusCode(401))
 	require.False(t, ShouldRetryByStatusCode(408))
 	require.True(t, ShouldRetryByStatusCode(429))

@@ -17,7 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
-import { describe, test } from 'node:test'
+
+import { describe, test } from 'vitest'
 
 import {
   modelFormSchema,
@@ -30,6 +31,7 @@ describe('model token limit fields', () => {
     const defaults = transformModelToFormDefaults({
       id: 1,
       model_name: 'example',
+      vendor_id: 0,
       status: 1,
       sync_official: 1,
       created_time: 0,
@@ -51,6 +53,7 @@ describe('model token limit fields', () => {
     for (const [field, value] of invalidLimits) {
       const result = modelFormSchema.safeParse({
         model_name: 'example',
+        vendor_id: 0,
         [field]: value,
       })
       assert.equal(result.success, false, `${field} should reject ${value}`)
@@ -62,6 +65,7 @@ describe('model token limit fields', () => {
     assert.equal(
       modelFormSchema.safeParse({
         model_name: 'example',
+        vendor_id: 0,
         context_window: unsafeInteger,
         max_output_tokens: 0,
       }).success,
@@ -70,6 +74,7 @@ describe('model token limit fields', () => {
     assert.equal(
       modelFormSchema.safeParse({
         model_name: 'example',
+        vendor_id: 0,
         context_window: 0,
         max_output_tokens: unsafeInteger,
       }).success,
@@ -80,6 +85,7 @@ describe('model token limit fields', () => {
   test('submits raw integer token counts', () => {
     const values = modelFormSchema.parse({
       model_name: 'example',
+      vendor_id: 0,
       context_window: 262144,
       max_output_tokens: 32768,
     })

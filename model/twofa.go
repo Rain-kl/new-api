@@ -38,7 +38,7 @@ type TwoFABackupCode struct {
 // GetTwoFAByUserId 根据用户ID获取2FA设置
 func GetTwoFAByUserId(userId int) (*TwoFA, error) {
 	if userId == 0 {
-		return nil, errors.New("用户ID不能为空")
+		return nil, errors.New("user ID is empty")
 	}
 
 	var twoFA TwoFA
@@ -64,9 +64,9 @@ func IsTwoFAEnabled(userId int) (bool, error) {
 
 func (t *TwoFA) updateUsageState() error {
 	if t.Id == 0 {
-		return errors.New("2FA记录ID不能为空")
+		return errors.New("2FA record ID is empty")
 	}
-	return DB.Model(&TwoFA{}).Where("id = ?", t.Id).Updates(map[string]interface{}{
+	return DB.Model(&TwoFA{}).Where("id = ?", t.Id).Updates(map[string]any{
 		"failed_attempts": t.FailedAttempts,
 		"locked_until":    t.LockedUntil,
 		"last_used_at":    t.LastUsedAt,
@@ -83,7 +83,7 @@ func (t *TwoFA) ResetFailedAttempts() error {
 // IncrementFailedAttempts 增加失败尝试次数
 func (t *TwoFA) IncrementFailedAttempts() error {
 	if t.Id == 0 {
-		return errors.New("2FA记录ID不能为空")
+		return errors.New("2FA record ID is empty")
 	}
 
 	const maxUpdateRetries = 5
@@ -109,7 +109,7 @@ func (t *TwoFA) IncrementFailedAttempts() error {
 
 		result := DB.Model(&TwoFA{}).
 			Where("id = ? AND failed_attempts = ? AND (locked_until IS NULL OR locked_until <= ?)", current.Id, current.FailedAttempts, now).
-			Updates(map[string]interface{}{
+			Updates(map[string]any{
 				"failed_attempts": nextFailedAttempts,
 				"locked_until":    nextLockedUntil,
 			})
@@ -125,7 +125,7 @@ func (t *TwoFA) IncrementFailedAttempts() error {
 		return nil
 	}
 
-	return errors.New("更新2FA失败次数冲突，请重试")
+	return errors.New("conflicting updates to the 2FA failure count, please retry")
 }
 
 // IsLocked 检查账户是否被锁定
@@ -191,7 +191,7 @@ func replaceBackupCodesWithAuthVersion(userId int, codes []string, identity *Aut
 // ValidateBackupCode 验证并使用备用码
 func ValidateBackupCode(userId int, code string) (bool, error) {
 	if !common.ValidateBackupCode(code) {
-		return false, errors.New("验证码或备用码不正确")
+		return false, errors.New("the verification code or backup code is incorrect")
 	}
 
 	normalizedCode := common.NormalizeBackupCode(code)
@@ -208,7 +208,7 @@ func ValidateBackupCode(userId int, code string) (bool, error) {
 			now := time.Now()
 			result := DB.Model(&TwoFABackupCode{}).
 				Where("id = ? AND is_used = ?", bc.Id, false).
-				Updates(map[string]interface{}{
+				Updates(map[string]any{
 					"is_used": true,
 					"used_at": now,
 				})
@@ -272,7 +272,7 @@ func disableTwoFAWithAuthVersion(userId int, identity *AuthSessionIdentity) erro
 func (t *TwoFA) ValidateTOTPAndUpdateUsage(code string) (bool, error) {
 	// 检查是否被锁定
 	if t.IsLocked() {
-		return false, fmt.Errorf("账户已被锁定，请在%v后重试", t.LockedUntil.Format("2006-01-02 15:04:05"))
+		return false, fmt.Errorf("the account is locked, retry after %v", t.LockedUntil.Format("2006-01-02 15:04:05"))
 	}
 
 	// 验证TOTP码
@@ -301,7 +301,7 @@ func (t *TwoFA) ValidateTOTPAndUpdateUsage(code string) (bool, error) {
 func (t *TwoFA) ValidateBackupCodeAndUpdateUsage(code string) (bool, error) {
 	// 检查是否被锁定
 	if t.IsLocked() {
-		return false, fmt.Errorf("账户已被锁定，请在%v后重试", t.LockedUntil.Format("2006-01-02 15:04:05"))
+		return false, fmt.Errorf("the account is locked, retry after %v", t.LockedUntil.Format("2006-01-02 15:04:05"))
 	}
 
 	// 验证备用码
@@ -332,7 +332,7 @@ func (t *TwoFA) ValidateBackupCodeAndUpdateUsage(code string) (bool, error) {
 }
 
 // GetTwoFAStats 获取2FA统计信息（管理员使用）
-func GetTwoFAStats() (map[string]interface{}, error) {
+func GetTwoFAStats() (map[string]any, error) {
 	var totalUsers, enabledUsers int64
 
 	// 总用户数
@@ -350,7 +350,7 @@ func GetTwoFAStats() (map[string]interface{}, error) {
 		enabledRate = float64(enabledUsers) / float64(totalUsers) * 100
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"total_users":   totalUsers,
 		"enabled_users": enabledUsers,
 		"enabled_rate":  fmt.Sprintf("%.1f%%", enabledRate),

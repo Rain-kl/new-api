@@ -3,14 +3,17 @@ package oairesponses
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/convdiag"
 	relaymedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/media"
 	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
+	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
 func convertOpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Meta, request any) (any, error) {
@@ -21,11 +24,6 @@ func convertOpenAIResponsesRequestToClaudeMessages(c context.Context, info convm
 	return OpenAIResponsesRequestToClaudeMessages(c, info, responsesRequest)
 }
 
-// OpenAIResponsesRequestToClaudeMessages converts Codex/OpenAI Responses into
-// Anthropic Messages. Tool handling is aligned with cc-switch
-// transform_codex_anthropic: function/custom/tool_search/namespace are
-// normalized through the shared Codex tool context before being emitted as
-// Claude tools / tool_use blocks.
 func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Meta, req *dto.OpenAIResponsesRequest) (*dto.ClaudeRequest, error) {
 	if req == nil {
 		return nil, fmt.Errorf("request is nil")
@@ -37,46 +35,35 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 		return nil, err
 	}
 
-	toolCtx, err := buildCodexToolContextFromRequest(req)
-	if err != nil {
-		return nil, err
-	}
-	AttachCodexToolBridge(info, toolCtx)
-
 	claudeRequest := &dto.ClaudeRequest{
 		Model:       req.Model,
-		Stream:      req.Stream,
 		Temperature: req.Temperature,
 		TopP:        req.TopP,
+		Stream:      req.Stream,
 	}
-
 	if req.MaxOutputTokens != nil && *req.MaxOutputTokens > 0 {
 		claudeRequest.MaxTokens = kitutil.GetPointer(*req.MaxOutputTokens)
 	}
-
-	claudeTools := codexChatToolsToClaudeTools(toolCtx.chatTools())
-	hasTools := len(claudeTools) > 0
-	if hasTools {
-		claudeRequest.Tools = claudeTools
+	functions, err := RequestFunctionDeclarations(req.Tools)
+	if err != nil {
+		return nil, err
+	}
+	if len(functions) > 0 {
+		claudeRequest.Tools = responsesFunctionDeclarationsToClaudeTools(functions)
 	}
 
-	// Anthropic 400s on tool_choice without tools; drop both when no tools
-	// survived Codex tool normalization (e.g. only web_search/local_shell).
-	if hasTools {
-		toolChoice, err := responsesRequestToolChoiceToChat(req.ToolChoice, toolCtx)
-		if err != nil {
-			return nil, err
-		}
-		if toolChoice != nil || RawJSONPresent(req.ParallelToolCalls) {
-			mappedChoice := sharedclaude.MapOpenAIToolChoice(toolChoice, ParallelToolCalls(req.ParallelToolCalls))
-			claudeRequest.ToolChoice = mappedChoice
-		}
+	toolChoice, err := RequestToolChoiceToChat(req.ToolChoice)
+	if err != nil {
+		return nil, err
 	}
-
-	sourceReasoning, err := reasoning.FromOpenAIResponses(req)
+	if toolChoice != nil || RawJSONPresent(req.ParallelToolCalls) {
+		claudeRequest.ToolChoice = sharedclaude.MapOpenAIToolChoice(toolChoice, ParallelToolCalls(req.ParallelToolCalls))
+	}
+	sourceReasoning, diagnostics, err := reasoning.FromOpenAIResponses(req)
 	if err != nil {
 		return nil, reasoning.AsClientError(err)
 	}
+	convdiag.Add(c, diagnostics...)
 	if err := sharedclaude.ApplyReasoning(c, claudeRequest, info, sourceReasoning, true); err != nil {
 		return nil, reasoning.AsClientError(err)
 	}
@@ -85,11 +72,6 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 			value := uint(defaultMaxTokens)
 			claudeRequest.MaxTokens = &value
 		}
-	}
-	if claudeRequest.Thinking != nil && claudeToolChoiceIsForced(claudeRequest.ToolChoice) {
-		claudeRequest.Thinking = nil
-		claudeRequest.Temperature = req.Temperature
-		claudeRequest.TopP = req.TopP
 	}
 
 	systemMessages := make([]dto.ClaudeMediaMessage, 0)
@@ -112,40 +94,29 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 	}
 	for _, item := range inputItems {
 		itemType := strings.TrimSpace(kitutil.Interface2String(item["type"]))
-		if isIncompleteResponsesToolCall(item) {
-			continue
-		}
 		switch itemType {
 		case ResponsesInputTypeFunctionCall:
-			toolUse := responsesFunctionCallItemToClaudeToolUse(item, "arguments", toolCtx)
-			claudeRequest.Messages = appendClaudeToolUse(claudeRequest.Messages, toolUse)
+			claudeRequest.Messages = appendClaudeToolUse(claudeRequest.Messages, responsesFunctionCallItemToClaudeToolUse(item))
 		case ResponsesInputTypeCustomToolCall:
-			toolUse := responsesCustomToolCallItemToClaudeToolUse(item)
-			claudeRequest.Messages = appendClaudeToolUse(claudeRequest.Messages, toolUse)
-		case responsesInputTypeToolSearchCall:
-			toolUse := responsesToolSearchCallItemToClaudeToolUse(item)
-			claudeRequest.Messages = appendClaudeToolUse(claudeRequest.Messages, toolUse)
-		case ResponsesInputTypeFunctionCallOutput:
-			claudeRequest.Messages = appendClaudeToolResult(claudeRequest.Messages, responsesFunctionOutputItemToClaudeToolResult(item))
-		case ResponsesInputTypeCustomToolOutput, responsesInputTypeToolSearchOutput:
-			// Keep whole-item payload as tool_result content (cc-switch).
+			name := responsesCallName(item)
+			if name == "" {
+				return nil, fmt.Errorf("custom_tool_call item is missing name")
+			}
+			// The custom tool is declared as a function taking one string
+			// argument, so its raw input is replayed in that shape.
+			claudeRequest.Messages = appendClaudeToolUse(claudeRequest.Messages, dto.ClaudeMediaMessage{
+				Type:  "tool_use",
+				Id:    CallID(item),
+				Name:  name,
+				Input: map[string]any{convmeta.CustomToolInputArgument: responsesArgumentsString(item["input"])},
+			})
+		case ResponsesInputTypeFunctionCallOutput, ResponsesInputTypeCustomToolOutput:
 			claudeRequest.Messages = appendClaudeToolResult(claudeRequest.Messages, dto.ClaudeMediaMessage{
 				Type:      "tool_result",
 				ToolUseId: CallID(item),
-				Content:   responsesToolOutputValue(item),
+				Content:   responsesToolOutputToClaude(c, item["output"]),
 			})
 		default:
-			// Skip non-message typed items (reasoning, etc.) that are not chat turns.
-			if itemType != "" && itemType != "message" {
-				// Restore Anthropic signed thinking blocks from Responses reasoning
-				// encrypted_content when present; otherwise drop.
-				if itemType == "reasoning" {
-					if thinkingBlock := responsesReasoningItemToClaudeThinking(item); thinkingBlock != nil {
-						claudeRequest.Messages = appendClaudeThinking(claudeRequest.Messages, *thinkingBlock)
-					}
-				}
-				continue
-			}
 			sourceRole := strings.TrimSpace(kitutil.Interface2String(item["role"]))
 			role := responsesClaudeRole(sourceRole)
 			parts, err := responsesInputContentToClaudeMediaMessages(c, item["content"])
@@ -177,6 +148,11 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 			})
 		}
 	}
+	claudeRequest.Messages = omitTrailingAssistantText(c, claudeRequest.Messages,
+		func(message dto.ClaudeMessage) bool { return message.Role == "user" },
+		func(message dto.ClaudeMessage) bool {
+			return message.Role == "assistant" && !slices.ContainsFunc(claudeMessageContentParts(message.Content), func(part dto.ClaudeMediaMessage) bool { return part.Type == "tool_use" })
+		})
 
 	if len(systemMessages) > 0 {
 		claudeRequest.System = systemMessages
@@ -192,57 +168,19 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 	return claudeRequest, nil
 }
 
-func codexChatToolsToClaudeTools(tools []dto.ToolCallRequest) []any {
-	if len(tools) == 0 {
-		return nil
-	}
-	out := make([]any, 0, len(tools))
-	for _, tool := range tools {
-		if tool.Type != "" && tool.Type != "function" {
-			continue
-		}
-		name := strings.TrimSpace(tool.Function.Name)
-		if name == "" {
-			continue
-		}
-		out = append(out, &dto.Tool{
-			Name:        name,
-			Description: tool.Function.Description,
-			InputSchema: sharedclaude.FunctionParametersToInputSchema(tool.Function.Parameters),
+func responsesFunctionDeclarationsToClaudeTools(functions []dto.FunctionRequest) []any {
+	tools := make([]any, 0, len(functions))
+	for _, function := range functions {
+		inputSchema, _ := sharedclaude.FunctionParametersToInputSchema(function.Parameters)
+		tools = append(tools, &dto.Tool{
+			Name:        function.Name,
+			Description: function.Description,
+			InputSchema: inputSchema,
 		})
 	}
-	return out
+	return tools
 }
 
-func claudeToolChoiceIsForced(choice any) bool {
-	if choice == nil {
-		return false
-	}
-	switch c := choice.(type) {
-	case *dto.ClaudeToolChoice:
-		if c == nil {
-			return false
-		}
-		return c.Type == "any" || c.Type == "tool"
-	case dto.ClaudeToolChoice:
-		return c.Type == "any" || c.Type == "tool"
-	case map[string]any:
-		t, _ := c["type"].(string)
-		return t == "any" || t == "tool"
-	default:
-		return false
-	}
-}
-
-func isIncompleteResponsesToolCall(item map[string]any) bool {
-	itemType := strings.TrimSpace(kitutil.Interface2String(item["type"]))
-	switch itemType {
-	case ResponsesInputTypeFunctionCall, ResponsesInputTypeCustomToolCall, responsesInputTypeToolSearchCall:
-		return strings.TrimSpace(kitutil.Interface2String(item["status"])) == "incomplete"
-	default:
-		return false
-	}
-}
 func responsesInputContentToClaudeMediaMessages(c context.Context, content any) ([]dto.ClaudeMediaMessage, error) {
 	contentParts, err := ContentParts(content)
 	if err != nil {
@@ -266,95 +204,81 @@ func responsesInputContentToClaudeMediaMessages(c context.Context, content any) 
 			if source == nil {
 				continue
 			}
-			base64Data, mimeType, err := relaymedia.ResolveBase64Data(c, source, "formatting Responses input for Claude")
-			if err != nil {
-				return nil, fmt.Errorf("get file data failed: %s", err.Error())
+			// Claude content blocks carry images, PDF documents, and text
+			// documents; audio and video have no Claude block.
+			reason := fmt.Sprintf("Claude Messages cannot carry %s content", partType)
+			var block dto.ClaudeMediaMessage
+			if partType == "input_image" || partType == "input_file" {
+				base64Data, mimeType, err := relaymedia.ResolveBase64Data(c, source, "formatting Responses input for Claude")
+				if err != nil {
+					return nil, fmt.Errorf("get file data failed: %s", err.Error())
+				}
+				block, reason = sharedclaude.MediaBlock(base64Data, mimeType, partType == "input_image")
 			}
-			claudePart := dto.ClaudeMediaMessage{
-				Source: &dto.ClaudeMessageSource{
-					Type:      "base64",
-					MediaType: mimeType,
-					Data:      base64Data,
-				},
+			if reason != "" {
+				convdiag.Add(c, types.ConversionDiagnostic{
+					Code:     "unsupported_media_type",
+					Path:     "input.content",
+					Message:  reason + "; the part was omitted",
+					Severity: types.ConversionDiagnosticError,
+				})
+				continue
 			}
-			if strings.HasPrefix(mimeType, "application/pdf") {
-				claudePart.Type = "document"
-			} else {
-				claudePart.Type = "image"
-			}
-			parts = append(parts, claudePart)
+			parts = append(parts, block)
 		}
 	}
 	return parts, nil
 }
 
-func responsesFunctionCallItemToClaudeToolUse(item map[string]any, inputKey string, toolCtx *codexToolContext) dto.ClaudeMediaMessage {
-	name := strings.TrimSpace(kitutil.Interface2String(item["name"]))
-	namespace := strings.TrimSpace(kitutil.Interface2String(item["namespace"]))
-	if toolCtx != nil {
-		name = toolCtx.chatNameForResponseFunction(name, namespace)
-	} else if namespace != "" {
-		name = flattenNamespaceToolName(namespace, name)
-	}
+func responsesFunctionCallItemToClaudeToolUse(item map[string]any) dto.ClaudeMediaMessage {
 	return dto.ClaudeMediaMessage{
 		Type:  "tool_use",
 		Id:    CallID(item),
-		Name:  name,
-		Input: ObjectValue(item[inputKey], inputKey),
-	}
-}
-
-func responsesCustomToolCallItemToClaudeToolUse(item map[string]any) dto.ClaudeMediaMessage {
-	input := item["input"]
-	if input == nil {
-		input = ""
-	}
-	return dto.ClaudeMediaMessage{
-		Type:  "tool_use",
-		Id:    CallID(item),
-		Name:  strings.TrimSpace(kitutil.Interface2String(item["name"])),
-		Input: map[string]any{customToolInputField: input},
-	}
-}
-
-func responsesToolSearchCallItemToClaudeToolUse(item map[string]any) dto.ClaudeMediaMessage {
-	return dto.ClaudeMediaMessage{
-		Type:  "tool_use",
-		Id:    CallID(item),
-		Name:  toolSearchProxyName,
+		Name:  responsesCallName(item),
 		Input: ObjectValue(item["arguments"], "arguments"),
 	}
 }
 
-func responsesFunctionOutputItemToClaudeToolResult(item map[string]any) dto.ClaudeMediaMessage {
-	return dto.ClaudeMediaMessage{
-		Type:      "tool_result",
-		ToolUseId: CallID(item),
-		Content:   responsesToolOutputValue(item["output"]),
+// responsesToolOutputToClaude maps a function_call_output payload onto Claude
+// tool_result content. A Responses content-part array becomes the text, image,
+// and document blocks tool_result accepts; stringifying it instead would hand
+// base64 media to the upstream text tokenizer. An array holding any other part
+// type, or media that cannot be resolved, keeps the stringified form, and other
+// payload shapes pass through unchanged.
+func responsesToolOutputToClaude(c context.Context, value any) any {
+	rawParts, ok := value.([]any)
+	if !ok || len(rawParts) == 0 {
+		if value == nil {
+			return ""
+		}
+		return value
 	}
-}
-
-func responsesToolOutputValue(value any) any {
-	if value == nil {
-		return ""
+	labels := make([]string, 0, len(rawParts))
+	for _, rawPart := range rawParts {
+		part, isMap := rawPart.(map[string]any)
+		if !isMap {
+			return responseToolOutputToChatContent(value)
+		}
+		switch partType := strings.TrimSpace(kitutil.Interface2String(part["type"])); partType {
+		case "input_text", "output_text", "text":
+		case "input_image", "input_file", "input_audio", "input_video":
+			if label := "[" + strings.TrimPrefix(partType, "input_") + "]"; !slices.Contains(labels, label) {
+				labels = append(labels, label)
+			}
+		default:
+			return responseToolOutputToChatContent(value)
+		}
 	}
-	return value
-}
-
-// responsesReasoningItemToClaudeThinking restores a signed Anthropic thinking
-// block when Responses reasoning.encrypted_content carries the cc-switch bridge
-// envelope. Unsigned / foreign ciphertext is ignored.
-func responsesReasoningItemToClaudeThinking(item map[string]any) *dto.ClaudeMediaMessage {
-	encrypted := strings.TrimSpace(kitutil.Interface2String(item["encrypted_content"]))
-	const prefix = "ccswitch-anthropic-thinking-v1:"
-	if !strings.HasPrefix(encrypted, prefix) {
-		return nil
+	blocks, err := responsesInputContentToClaudeMediaMessages(c, rawParts)
+	if err != nil {
+		return responseToolOutputToChatContent(value)
 	}
-	// Best-effort: if we cannot decode, drop rather than inventing an unsigned block.
-	// Full base64url decode is optional for this adapter path; summary text alone
-	// is not sufficient for Anthropic tool-turn replay, so skip when opaque.
-	_ = encrypted
-	return nil
+	if len(blocks) == 0 {
+		// Every media part was omitted with a diagnostic; name what was there
+		// instead of sending the payload as text.
+		return strings.Join(labels, " ")
+	}
+	return blocks
 }
 
 func appendClaudeToolUse(messages []dto.ClaudeMessage, toolUse dto.ClaudeMediaMessage) []dto.ClaudeMessage {
@@ -369,22 +293,6 @@ func appendClaudeToolUse(messages []dto.ClaudeMessage, toolUse dto.ClaudeMediaMe
 	return append(messages, dto.ClaudeMessage{
 		Role:    "assistant",
 		Content: []dto.ClaudeMediaMessage{toolUse},
-	})
-}
-
-func appendClaudeThinking(messages []dto.ClaudeMessage, thinking dto.ClaudeMediaMessage) []dto.ClaudeMessage {
-	if len(messages) > 0 && messages[len(messages)-1].Role == "assistant" {
-		last := messages[len(messages)-1]
-		parts := claudeMessageContentParts(last.Content)
-		// Thinking must lead the assistant turn content for Anthropic.
-		parts = append([]dto.ClaudeMediaMessage{thinking}, parts...)
-		last.Content = parts
-		messages[len(messages)-1] = last
-		return messages
-	}
-	return append(messages, dto.ClaudeMessage{
-		Role:    "assistant",
-		Content: []dto.ClaudeMediaMessage{thinking},
 	})
 }
 

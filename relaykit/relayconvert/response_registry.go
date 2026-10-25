@@ -902,7 +902,7 @@ func convertOAIChatResponseToOAIResponses(_ context.Context, info convmeta.Meta,
 	if id == "" {
 		id = fmt.Sprintf("resp_%s", kitutil.GetUUID())
 	}
-	return ChatCompletionsResponseToResponsesResponseWithBridge(chatResponse, id, convmeta.CodexToolBridgeOf(info))
+	return oaichat.ChatCompletionsResponseToResponsesResponseWithTools(chatResponse, id, convmeta.ResponsesToolStateOf(info))
 }
 
 func convertOAIResponsesResponseToOAIChat(_ context.Context, _ convmeta.Meta, response any) (any, *dto.Usage, error) {
@@ -947,8 +947,8 @@ func convertOAIChatStreamResponseToOAIResponses(_ context.Context, info convmeta
 	if !ok || streamState == nil {
 		return nil, nil, errors.New("OAI chat to OAI responses stream state is required")
 	}
-	if streamState.ToolBridge == nil {
-		streamState.ToolBridge = convmeta.CodexToolBridgeOf(info)
+	if streamState.Tools == nil {
+		streamState.Tools = convmeta.ResponsesToolStateOf(info)
 	}
 	events, err := ChatCompletionsStreamChunkToResponsesEvents(chatResponse, streamState)
 	if err != nil {

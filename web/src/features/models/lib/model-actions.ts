@@ -20,6 +20,8 @@ import type { QueryClient } from '@tanstack/react-query'
 import i18next from 'i18next'
 import { toast } from 'sonner'
 
+import { handleServerError } from '@/lib/handle-server-error'
+
 import {
   updateModelStatus,
   batchDisableModelsNoChannels,
@@ -47,15 +49,13 @@ export async function handleEnableModel(
       if (queryClient) await invalidateVendorData(queryClient)
       onSuccess?.()
     } else {
-      toast.error(
-        response.message || i18next.t('Failed to show model in model square')
+      handleServerError(
+        response,
+        i18next.t('Failed to show model in model square')
       )
     }
   } catch (error: unknown) {
-    toast.error(
-      (error as Error)?.message ||
-        i18next.t('Failed to show model in model square')
-    )
+    handleServerError(error, i18next.t('Failed to show model in model square'))
   }
 }
 
@@ -74,14 +74,15 @@ export async function handleDisableModel(
       if (queryClient) await invalidateVendorData(queryClient)
       onSuccess?.()
     } else {
-      toast.error(
-        response.message || i18next.t('Failed to hide model from model square')
+      handleServerError(
+        response,
+        i18next.t('Failed to hide model from model square')
       )
     }
   } catch (error: unknown) {
-    toast.error(
-      (error as Error)?.message ||
-        i18next.t('Failed to hide model from model square')
+    handleServerError(
+      error,
+      i18next.t('Failed to hide model from model square')
     )
   }
 }
@@ -150,7 +151,7 @@ export async function handleBatchEnableModels(
       )
     }
   } catch (error: unknown) {
-    toast.error((error as Error)?.message || i18next.t('Batch enable failed'))
+    handleServerError(error, i18next.t('Batch enable failed'))
   }
 }
 
@@ -200,7 +201,7 @@ export async function handleBatchDisableModels(
       )
     }
   } catch (error: unknown) {
-    toast.error((error as Error)?.message || i18next.t('Batch disable failed'))
+    handleServerError(error, i18next.t('Batch disable failed'))
   }
 }
 

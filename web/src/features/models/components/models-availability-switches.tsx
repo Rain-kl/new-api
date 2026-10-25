@@ -28,6 +28,7 @@ import {
   updateSystemOption,
 } from '@/features/system-settings/api'
 import { getOptionValue } from '@/features/system-settings/hooks/use-system-options'
+
 import { modelsQueryKeys } from '../lib'
 
 type AutoModelOptions = {
@@ -52,7 +53,10 @@ export function ModelsAvailabilitySwitches() {
 
   const serverValues = useMemo(
     () =>
-      getOptionValue(data?.data, DEFAULT_AUTO_MODEL_OPTIONS) as AutoModelOptions,
+      getOptionValue(
+        Array.isArray(data?.data) ? data.data : [],
+        DEFAULT_AUTO_MODEL_OPTIONS
+      ) as AutoModelOptions,
     [data?.data]
   )
 
@@ -82,7 +86,9 @@ export function ModelsAvailabilitySwitches() {
       queryClient.invalidateQueries({ queryKey: modelsQueryKeys.lists() })
       // keep local state in sync with just-saved key
       if (variables.key === 'AutomaticDisableModelEnabled') {
-        setDisableEnabled(variables.value === true || variables.value === 'true')
+        setDisableEnabled(
+          variables.value === true || variables.value === 'true'
+        )
       }
       if (variables.key === 'AutomaticEnableModelEnabled') {
         setEnableEnabled(variables.value === true || variables.value === 'true')
@@ -166,9 +172,7 @@ export function ModelsAvailabilitySwitches() {
   )
 
   return (
-    <div
-      className='grid min-w-0 gap-3 sm:grid-cols-2'
-    >
+    <div className='grid min-w-0 gap-3 sm:grid-cols-2'>
       <div className='flex min-w-0 items-center gap-2'>
         <Label
           htmlFor='auto-disable-models'

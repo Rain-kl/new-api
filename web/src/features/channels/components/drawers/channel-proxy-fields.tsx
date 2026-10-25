@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQuery } from '@tanstack/react-query'
 import { Activity } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { type UseFormReturn } from 'react-hook-form'
+import type { UseFormReturn } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -72,7 +72,10 @@ export function ChannelProxyFields({ form }: ChannelProxyFieldsProps) {
 
   const handleProxySelect = (value: string | null) => {
     const nextId = Number(value || '0') || 0
-    form.setValue('proxy_id', nextId, { shouldDirty: true, shouldValidate: true })
+    form.setValue('proxy_id', nextId, {
+      shouldDirty: true,
+      shouldValidate: true,
+    })
     if (nextId > 0) {
       const found = (proxies as Proxy[]).find((p) => p.id === nextId)
       if (found) {
@@ -103,7 +106,9 @@ export function ChannelProxyFields({ form }: ChannelProxyFieldsProps) {
             .join(' · ')
         )
       } else {
-        toast.error(data?.message || result.message || t('Failed to test proxy'))
+        toast.error(
+          data?.message || result.message || t('Failed to test proxy')
+        )
       }
     } catch {
       toast.error(t('Failed to test proxy'))
@@ -164,7 +169,9 @@ export function ChannelProxyFields({ form }: ChannelProxyFieldsProps) {
             className='bg-muted/40 font-mono text-xs'
           />
           <FormDescription>
-            {t('Managed by IP Management; URL updates when the pool entry changes')}
+            {t(
+              'Managed by IP Management; URL updates when the pool entry changes'
+            )}
           </FormDescription>
         </FormItem>
       ) : (
@@ -173,7 +180,7 @@ export function ChannelProxyFields({ form }: ChannelProxyFieldsProps) {
           name='proxy'
           render={({ field }) => (
             <FormItem>
-              <FormLabel>{t('Custom Proxy URL')}</FormLabel>
+              <FormLabel>{t('Proxy Address')}</FormLabel>
               <FormControl>
                 <Input
                   placeholder={t('socks5://user:pass@host:port')}

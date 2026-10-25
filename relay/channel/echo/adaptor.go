@@ -11,13 +11,13 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -257,7 +257,7 @@ func echoResponsesResponse(requestId string, modelName string, text string, useT
 	return dto.OpenAIResponsesResponse{
 		ID:        fmt.Sprintf("resp-%s", requestId),
 		Object:    "response",
-		CreatedAt: int(useTime),
+		CreatedAt: dto.IntValue(useTime),
 		Status:    status,
 		Model:     modelName,
 		Output: []dto.ResponsesOutput{
